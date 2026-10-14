@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>스쿼시 자세 분석</title>
+<style>
+  :root { --bg:#111418; --panel:#1b2027; --line:#2c333d; --text:#e8ecf1; --dim:#9aa4b2; --p1:#00d8ff; --p2:#ff9f1c; --accent:#ffd400; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 "Malgun Gothic", "Segoe UI", sans-serif; }
+  header { display:flex; gap:12px; align-items:center; flex-wrap:wrap; padding:10px 16px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:18px; margin:0 12px 0 0; }
+  #status { color:var(--dim); }
+  main { display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:16px; padding:16px; }
+  @media (max-width: 900px) { main { grid-template-columns:1fr; } }
+  #drop { min-height:200px; display:flex; align-items:center; justify-content:center; border:2px dashed var(--line); border-radius:8px; background:#000; }
+  #drop.over { border-color:var(--accent); }
+  #stage { position:relative; display:inline-block; line-height:0; }
+  #stage video { display:block; max-width:100%; max-height:72vh; }
+  #stage canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  #hint { color:var(--dim); padding:40px; text-align:center; line-height:1.6; }
+  #err { display:none; margin:12px 0; padding:12px 16px; background:#3a1d1d; border:1px solid #a33; border-radius:6px; }
+  #err pre { background:#000; padding:8px; user-select:all; white-space:pre-wrap; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px; }
+  #info { font:600 18px/1.4 Consolas, monospace; margin-top:10px; }
+  button, select, input { font:inherit; color:var(--text); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px 10px; }
+  button { cursor:pointer; }
+  button:hover { border-color:var(--dim); }
+  button:disabled { opacity:.4; cursor:default; }
+  input[type=number] { width:72px; }
+  progress { width:200px; }
+  aside section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:12px; }
+  aside h2 { font-size:14px; color:var(--dim); margin:0 0 8px; font-weight:600; }
+  #angles { width:100%; border-collapse:collapse; font-size:20px; }
+  #angles td { padding:3px 0; }
+  #angles td:last-child { text-align:right; font:700 22px Consolas, monospace; }
+  .p1 { color:var(--p1); } .p2 { color:var(--p2); }
+  #note, #label { width:100%; }
+  #caps { list-style:none; padding:0; margin:8px 0 0; max-height:260px; overflow:auto; }
+  #caps li { display:flex; gap:8px; align-items:center; font-size:13px; margin-bottom:6px; }
+  #caps img { width:96px; border-radius:4px; }
+  #chartBox { margin-top:12px; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px; }
+  #chart { width:100%; display:block; cursor:crosshair; }
+  .dim { color:var(--dim); font-size:13px; }
+  kbd { border:1px solid var(--line); border-radius:4px; padding:0 5px; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>스쿼시 자세 분석</h1>
+  <input type="file" id="file" accept="video/*">
+  <span id="status">모델 불러오는 중...</span>
+</header>
+<main>
+  <div>
+    <div id="drop"><div id="hint">영상 파일을 여기로 끌어다 놓거나 위에서 선택하세요.<br>
+      <kbd>Space</kbd> 재생/정지 · <kbd>←</kbd><kbd>→</kbd> 1프레임 · <kbd>Shift</kbd>+화살표 10프레임 · <kbd>C</kbd> 이 프레임 담기</div>
+      <div id="stage" hidden><video id="video" playsinline muted></video><canvas id="overlay"></canvas></div>
+    </div>
+    <div id="err"></div>
+    <div id="info">프레임 - / - · - fps · 00:00.000</div>
+    <div class="row">
+      <button id="play">재생/정지</button>
+      <button data-step="-10">-10</button><button data-step="-1">-1</button>
+      <button data-step="1">+1</button><button data-step="10">+10</button>
+      <label>fps <input type="number" id="fps" value="60" min="1" max="1000"></label>
+      <label>간격 <input type="number" id="stride" value="2" min="1" max="100"> 프레임마다</label>
+      <button id="analyze">전체 분석</button>
+      <progress id="prog" value="0" max="1" hidden></progress>
+      <button id="cancel" hidden>취소</button>
+    </div>
+    <div id="chartBox">
+      <div class="row" style="margin-top:0">
+        <label>그래프 <select id="chartKey"></select></label>
+        <span class="dim">선택한 사람 기준 · 그래프를 누르면 그 프레임으로 이동</span>
+      </div>
+      <svg id="chart" viewBox="0 0 1000 220"></svg>
+    </div>
+  </div>
+  <aside>
+    <section>
+      <h2>사람 선택</h2>
+      <label class="p1"><input type="radio" name="person" value="0" checked> 1번 (하늘색)</label>&nbsp;
+      <label class="p2"><input type="radio" name="person" value="1"> 2번 (주황)</label>
+    </section>
+    <section>
+      <h2>현재 프레임 각도</h2>
+      <table id="angles"></table>
+    </section>
+    <section>
+      <h2>이 프레임 담기 (C)</h2>
+      <input id="note" placeholder="한 줄 메모 (선택)" maxlength="200">
+      <div class="row"><button id="capture">이 프레임 담기</button><span id="capCount" class="dim">0장</span></div>
+      <ul id="caps"></ul>
+    </section>
+    <section>
+      <h2>분석 묶음 내보내기</h2>
+      <input id="label" placeholder="라벨 (예: solo-drive)" maxlength="60">
+      <div class="row"><button id="export">분석 묶음 내보내기</button></div>
+      <p class="dim">저장 위치로 저장소의 sessions 폴더를 고르세요. 날짜-라벨 폴더가 만들어집니다.</p>
+    </section>
+  </aside>
+</main>
+
+<script type="module">
+import { KEYS, LABELS, JOINTS, poseAngles } from './angles.mjs';
+
+const MP_VERSION = '1.1.0';
+const CDN = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}`;
+const COLORS = ['#00d8ff', '#ff9f1c'];
+const $ = id => document.getElementById(id);
+const video = $('video'), overlay = $('overlay'), ctx = overlay.getContext('2d');
+
+let landmarker = null, connections = [], lastTs = 0;
+let persons = [null, null], prevCenters = null;
+let series = new Map(), analyzedStride = null, analyzing = false, cancelled = false;
+let captures = [], videoName = '', videoUrl = null;
+
+const fps = () => Number($('fps').value) || 60;
+const sel = () => Number(document.querySelector('input[name=person]:checked').value);
+const total = () => video.duration ? Math.floor(video.duration * fps()) : 0;
+const curFrame = () => Math.min(Math.floor(video.currentTime * fps() + 1e-3), Math.max(total() - 1, 0));
+const r1 = v => v == null ? null : Math.round(v * 10) / 10;
+const status = t => { $('status').textContent = t; };
+
+for (const k of KEYS) $('chartKey').add(new Option(LABELS[k], k));
+$('chartKey').value = 'knee_r';
+
+// ---- model ----
+(async () => {
+  try {
+    const { FilesetResolver, PoseLandmarker } = await import(`${CDN}/vision_bundle.mjs`);
+    const fileset = await FilesetResolver.forVisionTasks(`${CDN}/wasm`);
+    const make = delegate => PoseLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: './models/pose_landmarker_full.task', delegate },
+      runningMode: 'VIDEO', numPoses: 2,
+    });
+    try { landmarker = await make('GPU'); } catch { landmarker = await make('CPU'); }
+    connections = PoseLandmarker.POSE_CONNECTIONS.filter(c => c.start >= 11 && c.end >= 11);
+    status(`준비됨 (MediaPipe ${MP_VERSION})`);
+    if (video.readyState >= 2) { detect(); render(); }
+  } catch (e) {
+    status('모델을 불러오지 못했습니다: ' + e.message);
+    console.error(e);
+  }
+})();
+
+// ---- video loading ----
+function openFile(file) {
+  if (!file) return;
+  if (videoUrl) URL.revokeObjectURL(videoUrl);
+  videoName = file.name;
+  $('label').value ||= file.name.replace(/\.[^.]+$/, '');
+  series = new Map(); analyzedStride = null; captures = []; persons = [null, null]; prevCenters = null;
+  renderCaptures(); drawChart();
+  $('err').style.display = 'none';
+  videoUrl = URL.createObjectURL(file);
+  video.src = videoUrl;
+}
+function showDecodeError() {
+  $('stage').hidden = true; $('hint').hidden = false;
+  $('err').style.display = 'block';
+  $('err').innerHTML = `<b>이 영상은 브라우저에서 열 수 없습니다.</b> 아이폰 HEVC(H.265) 영상일 가능성이 큽니다.<br>
+    명령 프롬프트에서 아래 명령으로 변환한 뒤 out.mp4를 여세요 (in.mov는 원래 파일 이름으로 바꾸세요).
+    <pre>ffmpeg -i in.mov -c:v libx264 -crf 18 -an out.mp4</pre>`;
+}
+$('file').onchange = e => openFile(e.target.files[0]);
+const drop = $('drop');
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); openFile(e.dataTransfer.files[0]); };
+
+video.onerror = showDecodeError;
+video.onloadedmetadata = () => {
+  if (!video.videoWidth) return showDecodeError();
+  overlay.width = video.videoWidth; overlay.height = video.videoHeight;
+  $('hint').hidden = true; $('stage').hidden = false;
+  seekFrame(0);
+};
+video.onseeked = () => { if (!analyzing) { detect(); render(); } };
+
+function seekFrame(n) {
+  n = Math.max(0, Math.min(n, total() - 1));
+  const t = (n + 0.5) / fps();
+  return new Promise(res => {
+    if (Math.abs(video.currentTime - t) < 1e-6) return res();
+    video.addEventListener('seeked', () => res(), { once: true });
+    video.currentTime = t;
+  });
+}
+function onFrame() {
+  if (!analyzing) { detect(); render(); }
+  if (!video.paused) video.requestVideoFrameCallback(onFrame);
+}
+video.onplay = () => video.requestVideoFrameCallback(onFrame);
+video.onpause = () => { detect(); render(); };
+
+// ---- pose ----
+function detect() {
+  if (!landmarker || video.readyState < 2) return persons;
+  lastTs = Math.max(lastTs + 1, Math.round(performance.now())); // VIDEO mode needs increasing timestamps
+  const list = landmarker.detectForVideo(video, lastTs).landmarks || [];
+  persons = assign(list);
+  return persons;
+}
+// Keep person 1/2 stable across frames: match by hip center to the previous frame.
+// ponytail: nearest-center matching only; breaks when players cross. Add re-id if that matters.
+function assign(list) {
+  const center = lm => ({ x: (lm[23].x + lm[24].x) / 2, y: (lm[23].y + lm[24].y) / 2 });
+  const d = (a, b) => (a && b) ? Math.hypot(a.x - b.x, a.y - b.y) : 0;
+  let out = [list[0] || null, list[1] || null];
+  if (prevCenters) {
+    const c = out.map(lm => lm && center(lm));
+    const keep = d(c[0], prevCenters[0]) + d(c[1], prevCenters[1]);
+    const swap = d(c[0], prevCenters[1]) + d(c[1], prevCenters[0]);
+    if (list.length === 1 && prevCenters[1] && (!prevCenters[0] || d(c[0], prevCenters[1]) < d(c[0], prevCenters[0]))) out = [null, out[0]];
+    else if (list.length === 2 && swap < keep) out = [out[1], out[0]];
+  }
+  prevCenters = out.map((lm, i) => lm ? center(lm) : prevCenters?.[i] || null);
+  return out;
+}
+
+// ---- drawing ----
+function render() {
+  const W = overlay.width, H = overlay.height, s = sel();
+  ctx.clearRect(0, 0, W, H);
+  persons.forEach((lm, i) => lm && drawSkeleton(lm, COLORS[i], i === s));
+  const lm = persons[s];
+  if (lm) for (const k of ['knee_l', 'knee_r']) drawKnee(lm, k, COLORS[s]);
+  const a = lm ? poseAngles(lm, W, H) : {};
+  $('angles').innerHTML = KEYS.map(k => `<tr><td>${LABELS[k]}</td><td>${a[k] == null ? '-' : a[k].toFixed(1) + '°'}</td></tr>`).join('');
+  const t = video.currentTime || 0, m = Math.floor(t / 60);
+  $('info').textContent = `프레임 ${video.duration ? curFrame() : '-'} / ${total() || '-'} · ${fps()} fps · ${String(m).padStart(2, '0')}:${(t - m * 60).toFixed(3).padStart(6, '0')}`;
+  updateCursor();
+}
+function drawSkeleton(lm, color, selected) {
+  const W = overlay.width, H = overlay.height, lw = Math.max(4, H / 130) * (selected ? 1.3 : 1);
+  ctx.lineCap = 'round';
+  ctx.globalAlpha = selected ? 1 : 0.75;
+  for (const { start, end } of connections) {
+    ctx.beginPath(); ctx.moveTo(lm[start].x * W, lm[start].y * H); ctx.lineTo(lm[end].x * W, lm[end].y * H);
+    ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.lineWidth = lw + 4; ctx.stroke(); // dark outline: readable on bright walls
+    ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.stroke();
+  }
+  ctx.fillStyle = '#fff';
+  for (let i = 11; i < lm.length; i++) { ctx.beginPath(); ctx.arc(lm[i].x * W, lm[i].y * H, lw * 0.9, 0, 7); ctx.fill(); }
+  ctx.globalAlpha = 1;
+}
+function drawKnee(lm, key, color) {
+  const W = overlay.width, H = overlay.height;
+  const deg = poseAngles(lm, W, H)[key];
+  if (deg == null) return;
+  const [a, b, c] = JOINTS[key].map(i => ({ x: lm[i].x * W, y: lm[i].y * H }));
+  const r = H / 14, t1 = Math.atan2(a.y - b.y, a.x - b.x);
+  let diff = Math.atan2(c.y - b.y, c.x - b.x) - t1;
+  if (diff > Math.PI) diff -= 2 * Math.PI; if (diff < -Math.PI) diff += 2 * Math.PI;
+  ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.arc(b.x, b.y, r, t1, t1 + diff, diff < 0); ctx.closePath();
+  ctx.fillStyle = 'rgba(255,212,0,.35)'; ctx.fill();
+  ctx.beginPath(); ctx.arc(b.x, b.y, r, t1, t1 + diff, diff < 0);
+  ctx.strokeStyle = '#ffd400'; ctx.lineWidth = Math.max(4, H / 150); ctx.stroke();
+  // label on the outside of the knee (opposite the angle's bisector)
+  const mid = t1 + diff / 2 + Math.PI, fs = Math.round(H / 16);
+  const text = `${key.endsWith('_l') ? 'L' : 'R'} ${Math.round(deg)}°`;
+  ctx.font = `700 ${fs}px "Segoe UI", sans-serif`;
+  const tw = ctx.measureText(text).width, pad = fs * 0.3;
+  let x = b.x + Math.cos(mid) * r * 1.5 - tw / 2, y = b.y + Math.sin(mid) * r * 1.5 - fs / 2;
+  x = Math.max(4, Math.min(x, W - tw - 2 * pad - 4)); y = Math.max(4, Math.min(y, H - fs - 2 * pad - 4));
+  ctx.fillStyle = 'rgba(0,0,0,.75)'; ctx.fillRect(x, y, tw + 2 * pad, fs + 2 * pad);
+  ctx.strokeStyle = color; ctx.lineWidth = Math.max(2, H / 360); ctx.strokeRect(x, y, tw + 2 * pad, fs + 2 * pad);
+  ctx.fillStyle = '#fff'; ctx.textBaseline = 'top'; ctx.fillText(text, x + pad, y + pad * 1.1);
+}
+
+// ---- controls ----
+$('play').onclick = () => video.paused ? video.play() : video.pause();
+document.querySelectorAll('[data-step]').forEach(b => b.onclick = () => step(Number(b.dataset.step)));
+function step(n) { if (!video.duration || analyzing) return; video.pause(); seekFrame(curFrame() + n); }
+document.querySelectorAll('input[name=person]').forEach(r => r.onchange = () => { render(); drawChart(); });
+$('fps').onchange = () => render();
+$('chartKey').onchange = drawChart;
+document.addEventListener('keydown', e => {
+  if (e.target.matches?.('input:not([type=radio]), select, textarea') || !video.duration) return;
+  if (e.code === 'Space') { e.preventDefault(); if (!analyzing) $('play').click(); }
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); step((e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 10 : 1)); }
+  else if (e.code === 'KeyC' && !e.ctrlKey && !e.metaKey) capture();
+});
+
+// ---- full analysis ----
+$('analyze').onclick = async () => {
+  if (!video.duration) return status('먼저 영상을 여세요.');
+  if (!landmarker) return status('모델이 아직 준비되지 않았습니다.');
+  const stride = Math.max(1, Number($('stride').value) || 2), n = total();
+  analyzing = true; cancelled = false; video.pause();
+  series = new Map(); prevCenters = null; analyzedStride = stride;
+  $('prog').hidden = $('cancel').hidden = false; $('analyze').disabled = true;
+  for (let f = 0; f < n && !cancelled; f += stride) {
+    await seekFrame(f);
+    const ps = detect(); render();
+    series.set(f, ps.map(lm => lm ? poseAngles(lm, overlay.width, overlay.height) : null));
+    $('prog').value = f / n;
+    if (f % (stride * 10) === 0) drawChart();
+  }
+  analyzing = false;
+  $('prog').hidden = $('cancel').hidden = true; $('analyze').disabled = false;
+  status(`${cancelled ? '분석 취소됨' : '분석 완료'}: ${series.size}개 프레임`);
+  drawChart();
+};
+$('cancel').onclick = () => { cancelled = true; };
+
+// ---- chart ----
+const CW = 1000, CH = 220, PL = 44, PR = 10, PT = 10, PB = 24;
+const cx = f => PL + f / Math.max(total() - 1, 1) * (CW - PL - PR);
+const cy = v => CH - PB - v / 180 * (CH - PT - PB);
+function drawChart() {
+  const key = $('chartKey').value, s = sel(), svg = $('chart');
+  let grid = '';
+  for (const v of [0, 45, 90, 135, 180]) grid += `<line x1="${PL}" x2="${CW - PR}" y1="${cy(v)}" y2="${cy(v)}" stroke="#2c333d"/><text x="${PL - 6}" y="${cy(v) + 4}" fill="#9aa4b2" font-size="12" text-anchor="end">${v}°</text>`;
+  let d = '', pen = false;
+  for (const f of [...series.keys()].sort((a, b) => a - b)) {
+    const v = series.get(f)[s]?.[key];
+    if (v == null) { pen = false; continue; }
+    d += `${pen ? 'L' : 'M'}${cx(f).toFixed(1)},${cy(v).toFixed(1)}`; pen = true;
+  }
+  const empty = series.size ? '' : `<text x="${CW / 2}" y="${CH / 2}" fill="#9aa4b2" font-size="16" text-anchor="middle">전체 분석을 실행하면 그래프가 나타납니다</text>`;
+  svg.innerHTML = grid + empty + `<path d="${d}" fill="none" stroke="${COLORS[s]}" stroke-width="2.5" stroke-linejoin="round"/>` +
+    `<line id="cursor" y1="${PT}" y2="${CH - PB}" stroke="#ffd400" stroke-width="2"/>`;
+  updateCursor();
+}
+function updateCursor() {
+  const c = $('cursor'); if (!c) return;
+  const x = video.duration ? cx(curFrame()) : PL;
+  c.setAttribute('x1', x); c.setAttribute('x2', x);
+}
+$('chart').onclick = e => {
+  if (!video.duration || analyzing) return;
+  const r = $('chart').getBoundingClientRect(), x = (e.clientX - r.left) / r.width * CW;
+  video.pause(); seekFrame(Math.round((x - PL) / (CW - PL - PR) * (total() - 1)));
+};
+drawChart();
+
+// ---- capture ----
+$('capture').onclick = capture;
+async function capture() {
+  if (!video.videoWidth) return;
+  const c = document.createElement('canvas'); c.width = overlay.width; c.height = overlay.height;
+  const g = c.getContext('2d'); g.drawImage(video, 0, 0); g.drawImage(overlay, 0, 0);
+  const blob = await new Promise(res => c.toBlob(res, 'image/png'));
+  const f = curFrame(), s = sel(), lm = persons[s];
+  const a = lm ? poseAngles(lm, overlay.width, overlay.height) : {};
+  captures.push({ frame: f, time_sec: Math.round(f / fps() * 1000) / 1000, person: s + 1, note: $('note').value.trim(),
+    angles: Object.fromEntries(KEYS.map(k => [k, r1(a[k])])), image: `frames/f${String(f).padStart(6, '0')}.png`, blob });
+  $('note').value = '';
+  renderCaptures();
+  status(`프레임 ${f} 담음`);
+}
+function renderCaptures() {
+  $('capCount').textContent = `${captures.length}장`;
+  $('caps').innerHTML = '';
+  for (const c of captures) {
+    const li = document.createElement('li'), img = new Image();
+    img.src = URL.createObjectURL(c.blob);
+    li.append(img, `프레임 ${c.frame} · ${c.person}번${c.note ? ' · ' + c.note : ''}`);
+    $('caps').append(li);
+  }
+}
+
+// ---- export ----
+$('export').onclick = async () => {
+  if (!video.duration) return status('먼저 영상을 여세요.');
+  const label = ($('label').value.trim() || 'session').replace(/[\\/:*?"<>|\s]+/g, '-');
+  const now = new Date(), pad = n => String(n).padStart(2, '0');
+  const dir = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${label}`;
+  const meta = { video_name: videoName, label, fps: fps(), stride: analyzedStride, width: video.videoWidth, height: video.videoHeight,
+    duration_sec: Math.round(video.duration * 1000) / 1000, frames_total: total(), created_at: now.toISOString(), mediapipe_version: MP_VERSION };
+  const files = [
+    ['meta.json', JSON.stringify(meta, null, 2)],
+    ['angles.csv', anglesCsv()],
+    ['captures.json', JSON.stringify(captures.map(({ blob, ...c }) => c), null, 2)],
+    ...captures.map(c => [c.image, c.blob]),
+  ];
+  if (window.showDirectoryPicker) {
+    let root;
+    try { root = await showDirectoryPicker({ id: 'squash-sessions', mode: 'readwrite' }); }
+    catch (e) { if (e.name === 'AbortError') return; throw e; }
+    const out = await root.getDirectoryHandle(dir, { create: true });
+    const frames = captures.length ? await out.getDirectoryHandle('frames', { create: true }) : null;
+    for (const [path, data] of files) {
+      const [h, name] = path.startsWith('frames/') ? [frames, path.slice(7)] : [out, path];
+      const w = await (await h.getFileHandle(name, { create: true })).createWritable();
+      await w.write(data); await w.close();
+    }
+    status(`내보냄: ${root.name}/${dir} (파일 ${files.length}개)`);
+  } else {
+    // Fallback: plain downloads. PNGs go into a frames/ folder by hand.
+    for (const [path, data] of files) {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(data instanceof Blob ? data : new Blob([data]));
+      a.download = path.split('/').pop(); a.click();
+      await new Promise(r => setTimeout(r, 300));
+    }
+    status(`파일 ${files.length}개를 내려받았습니다. ${dir} 폴더를 만들고 넣으세요 (PNG는 frames 폴더 안).`);
+  }
+};
+function anglesCsv() {
+  const rows = ['frame,time_sec,person,' + KEYS.join(',')];
+  for (const f of [...series.keys()].sort((a, b) => a - b)) {
+    const t = (f / fps()).toFixed(3), ps = series.get(f);
+    if (!ps.some(Boolean)) rows.push(`${f},${t},` + ','.repeat(KEYS.length));
+    ps.forEach((a, i) => a && rows.push(`${f},${t},${i + 1},` + KEYS.map(k => a[k] == null ? '' : a[k].toFixed(1)).join(',')));
+  }
+  return rows.join('\n') + '\n';
+}
+</script>
+</body>
+</html>

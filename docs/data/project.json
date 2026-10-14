@@ -1,0 +1,15 @@
+{
+  "title": "AI에게만 배워서 첫 스쿼시 대회 나가기",
+  "question": "사람 코치 레슨 없이 AI에게만 배워서 첫 아마추어 대회에서 성과를 낼 수 있는가",
+  "start_date": "2026-10-15",
+  "tournament_date": "2026-11-22",
+  "rule": "과정 지표 5개 중 3개 이상 개선이면 AI 코칭이 작동했다고 판정",
+  "youtube_playlist": "",
+  "metrics": [
+    {"id": "ghost_test_sec", "name": "고스팅 테스트 기록", "unit": "초", "better": "lower"},
+    {"id": "hr_recovery_1min", "name": "1분 회복 심박", "unit": "bpm", "better": "higher"},
+    {"id": "error_rate", "name": "경기 범실률", "unit": "%", "better": "lower"},
+    {"id": "t_occupancy", "name": "T 점유율", "unit": "%", "better": "higher"},
+    {"id": "posture_angle", "name": "고친 자세 항목 각도", "unit": "도", "better": "target", "target": null}
+  ]
+}

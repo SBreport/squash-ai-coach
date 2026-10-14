@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 스쿼시 코치 대시보드</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --line:#e1e4e8; --text:#1d232b; --dim:#66707c; --accent:#0a7cff; --good:#127a3a; --good-bg:#e3f5e9; --bad:#b42318; --bad-bg:#fde8e6; --neu-bg:#eceef1; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111418; --card:#1b2027; --line:#2c333d; --text:#e8ecf1; --dim:#9aa4b2; --accent:#4da3ff; --good:#5fd38a; --good-bg:#16301f; --bad:#ff8a7a; --bad-bg:#3a1d1d; --neu-bg:#262c35; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.6 "Malgun Gothic", "Apple SD Gothic Neo", "Segoe UI", sans-serif; }
+  .wrap { max-width:960px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:26px; line-height:1.3; margin:0 0 8px; }
+  h2 { font-size:19px; margin:36px 0 12px; }
+  h3 { font-size:16px; margin:0 0 6px; }
+  a { color:var(--accent); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:12px; }
+  .dday { display:inline-block; font:800 22px/1 Consolas, monospace; background:var(--accent); color:#fff; border-radius:8px; padding:8px 12px; margin-bottom:12px; }
+  .q { font-size:17px; }
+  .rule { border-left:4px solid var(--accent); padding:6px 12px; background:var(--card); margin-top:12px; }
+  .dim { color:var(--dim); font-size:13px; }
+  .empty { color:var(--dim); text-align:center; padding:28px 16px; border:1px dashed var(--line); border-radius:10px; background:var(--card); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:12px; }
+  .chip { display:inline-block; font-size:12px; font-weight:700; border-radius:999px; padding:2px 10px; background:var(--neu-bg); color:var(--dim); }
+  .chip.good { background:var(--good-bg); color:var(--good); }
+  .chip.bad { background:var(--bad-bg); color:var(--bad); }
+  .metric svg { width:100%; height:90px; display:block; margin-top:6px; }
+  .summary { font-size:18px; font-weight:700; margin-bottom:12px; }
+  table { width:100%; border-collapse:collapse; background:var(--card); }
+  th, td { text-align:left; padding:8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--dim); font-weight:600; font-size:13px; }
+  .scroll { overflow-x:auto; border:1px solid var(--line); border-radius:10px; }
+  ul { margin:4px 0; padding-left:20px; }
+  .diag { border-top:1px solid var(--line); padding-top:10px; margin-top:10px; }
+  footer { margin-top:48px; color:var(--dim); font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header id="head"></header>
+  <h2>이번 주 처방</h2><div id="rx"></div>
+  <h2>판정 지표</h2><div id="metrics"></div>
+  <h2>주간 코치 리포트</h2><div id="reports"></div>
+  <h2>훈련 일지</h2><div id="log"></div>
+  <footer id="foot"></footer>
+</div>
+<script type="module">
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const link = (url, text) => /^https?:\/\//.test(url || '') ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(text || url)}</a>` : esc(text || '');
+const empty = t => `<div class="empty">${t}</div>`;
+const $ = id => document.getElementById(id);
+const get = name => fetch(`data/${name}.json`, { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(new Error(`${name}.json ${r.status}`)));
+
+try {
+  const [project, sessions, metrics, rx, reports] = await Promise.all(['project', 'sessions', 'metrics', 'prescriptions', 'reports'].map(get));
+  head(project); prescription(rx); metricCards(project, metrics); reportList(reports); logTable(sessions); foot(project);
+} catch (e) {
+  $('head').innerHTML = empty('데이터를 불러오지 못했습니다: ' + esc(e.message));
+}
+
+function head(p) {
+  const day = d => { const [y, m, dd] = d.split('-').map(Number); return new Date(y, m - 1, dd); };
+  const now = new Date(), today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const n = Math.round((day(p.tournament_date) - today) / 864e5);
+  const dday = n > 0 ? `D-${n}` : n === 0 ? 'D-DAY' : `대회 후 ${-n}일`;
+  document.title = p.title;
+  $('head').innerHTML = `<div class="dday">${dday}</div><h1>${esc(p.title)}</h1>
+    <div class="q">${esc(p.question)}</div>
+    <div class="dim">시작 ${esc(p.start_date)} · 대회 ${esc(p.tournament_date)}</div>
+    <div class="rule"><b>판정 규칙</b> ${esc(p.rule)}</div>`;
+}
+
+function prescription(list) {
+  if (!list.length) return $('rx').innerHTML = empty('첫 처방 준비 중 (기준선 측정 후 발행)');
+  const w = [...list].sort((a, b) => b.week - a.week)[0];
+  const days = (w.sessions || []).map(s => {
+    const min = (s.items || []).reduce((t, i) => t + (Number(i.min) || 0), 0);
+    return `<div class="card"><h3>${esc(s.day)}요일 <span class="dim">${min}분</span></h3><ul>${(s.items || []).map(i =>
+      `<li><b>${esc(i.name)}</b> ${esc(i.min)}분${i.detail ? ` · ${esc(i.detail)}` : ''}${i.source_url ? ` · ${link(i.source_url, '출처')}` : ''}</li>`).join('')}</ul></div>`;
+  }).join('');
+  $('rx').innerHTML = `<div class="card"><h3>${esc(w.week)}주차 <span class="dim">${esc(w.start)} ~ ${esc(w.end)}</span></h3>
+    ${w.focus ? `<div><b>초점</b> ${esc(w.focus)}</div>` : ''}
+    ${w.game_task ? `<div><b>경기 과제</b> ${esc(w.game_task)}</div>` : ''}
+    ${w.load_cap ? `<div><b>부하 상한</b> ${esc(w.load_cap)}</div>` : ''}</div><div class="grid">${days}</div>`;
+}
+
+// state of one metric: baseline = first value, compared with the latest
+function judge(m, vals) {
+  if (!vals.length) return ['기준선 측정 전', ''];
+  if (vals.length < 2) return ['재측정 전', ''];
+  const b = vals[0].value, l = vals[vals.length - 1].value;
+  let better;
+  if (m.better === 'lower') better = l < b ? 1 : l > b ? -1 : 0;
+  else if (m.better === 'higher') better = l > b ? 1 : l < b ? -1 : 0;
+  else if (m.target == null) return ['목표 미정', ''];
+  else { const db = Math.abs(b - m.target), dl = Math.abs(l - m.target); better = dl < db ? 1 : dl > db ? -1 : 0; }
+  return better > 0 ? ['개선', 'good'] : better < 0 ? ['악화', 'bad'] : ['변화 없음', ''];
+}
+
+function spark(vals, m) {
+  if (!vals.length) return `<svg viewBox="0 0 300 90"><text x="150" y="50" text-anchor="middle" fill="currentColor" opacity=".5" font-size="13">기준선 측정 전</text></svg>`;
+  const ys = vals.map(v => v.value).concat(m.target ?? []);
+  let lo = Math.min(...ys), hi = Math.max(...ys);
+  if (lo === hi) { lo -= 1; hi += 1; }
+  const x = i => vals.length === 1 ? 150 : 16 + i / (vals.length - 1) * 268;
+  const y = v => 76 - (v - lo) / (hi - lo) * 60;
+  const pts = vals.map((v, i) => `${x(i).toFixed(1)},${y(v.value).toFixed(1)}`).join(' ');
+  return `<svg viewBox="0 0 300 90" role="img" aria-label="${esc(m.name)} 추이">
+    <line x1="8" x2="292" y1="${y(vals[0].value)}" y2="${y(vals[0].value)}" stroke="currentColor" opacity=".35" stroke-dasharray="4 4"/>
+    <text x="292" y="${y(vals[0].value) - 4}" text-anchor="end" font-size="11" fill="currentColor" opacity=".6">기준선 ${esc(vals[0].value)}</text>
+    ${m.target != null ? `<line x1="8" x2="292" y1="${y(m.target)}" y2="${y(m.target)}" stroke="var(--good)" opacity=".6" stroke-dasharray="2 4"/>` : ''}
+    <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2.5"/>
+    ${vals.map((v, i) => `<circle cx="${x(i)}" cy="${y(v.value)}" r="3.5" fill="var(--accent)"><title>${esc(v.date)} ${esc(v.value)}${esc(m.unit)}</title></circle>`).join('')}
+  </svg>`;
+}
+
+function metricCards(p, all) {
+  let good = 0;
+  const cards = p.metrics.map(m => {
+    const vals = all.filter(r => r.metric === m.id).sort((a, b) => a.date.localeCompare(b.date));
+    const [state, cls] = judge(m, vals);
+    if (cls === 'good') good++;
+    const last = vals[vals.length - 1];
+    return `<div class="card metric"><h3>${esc(m.name)} <span class="chip ${cls}">${state}</span></h3>
+      <div class="dim">${last ? `최근 ${esc(last.value)}${esc(m.unit)} (${esc(last.date)})` : '아직 기록 없음'} · ${m.better === 'lower' ? '낮을수록 좋음' : m.better === 'higher' ? '높을수록 좋음' : '목표값에 가까울수록 좋음'}</div>
+      ${spark(vals, m)}</div>`;
+  }).join('');
+  $('metrics').innerHTML = `<div class="summary">${good} / ${p.metrics.length} 개선</div><div class="grid">${cards}</div>`;
+}
+
+function reportList(list) {
+  if (!list.length) return $('reports').innerHTML = empty('첫 코치 리포트 발행 전');
+  $('reports').innerHTML = [...list].sort((a, b) => b.date.localeCompare(a.date)).map(r => `<div class="card">
+    <h3>${esc(r.week)}주차 리포트 <span class="dim">${esc(r.date)}</span></h3>
+    ${(r.diagnoses || []).map(d => `<div class="diag"><b>${esc(d.title)}</b> <span class="chip">확신 ${esc(d.confidence)}</span>
+      ${d.observation ? `<div><b>관찰</b> ${esc(d.observation)}</div>` : ''}
+      ${d.interpretation ? `<div><b>해석</b> ${esc(d.interpretation)}</div>` : ''}
+      ${d.evidence ? `<div><b>근거</b> ${esc(d.evidence)}</div>` : ''}
+      ${d.source && d.source.url ? `<div class="dim">출처: ${link(d.source.url, [d.source.channel, d.source.title].filter(Boolean).join(' - ') || d.source.url)}${d.source.timestamp ? ` (${esc(d.source.timestamp)})` : ''}</div>` : ''}
+    </div>`).join('')}
+    ${(r.fix_this_week || []).filter(Boolean).length ? `<div class="diag"><b>이번 주 고칠 것</b><ul>${r.fix_this_week.filter(Boolean).map(f => `<li>${esc(f)}</li>`).join('')}</ul></div>` : ''}
+    ${r.last_week_effect ? `<div class="diag"><b>지난주 효과</b> ${esc(r.last_week_effect)}</div>` : ''}
+    ${(r.ai_mistakes || []).filter(Boolean).length ? `<div class="diag"><b>AI가 틀린 것</b><ul>${r.ai_mistakes.filter(Boolean).map(f => `<li>${esc(f)}</li>`).join('')}</ul></div>` : ''}
+  </div>`).join('');
+}
+
+function logTable(list) {
+  if (!list.length) return $('log').innerHTML = empty('아직 훈련 기록 없음');
+  const type = { solo: '개인 훈련', game: '경기', test: '측정', tournament: '대회' };
+  const dash = v => v == null || v === '' ? '-' : esc(v);
+  $('log').innerHTML = `<div class="scroll"><table><thead><tr><th>날짜</th><th>종류</th><th>시간</th><th>RPE</th><th>평균/최대 심박</th><th>메모</th></tr></thead><tbody>${
+    [...list].sort((a, b) => b.date.localeCompare(a.date)).map(s => `<tr><td>${esc(s.date)}</td><td>${esc(type[s.type] || s.type)}</td>
+      <td>${dash(s.duration_min)}분</td><td>${dash(s.rpe)}</td><td>${dash(s.hr_avg)} / ${dash(s.hr_max)}</td><td>${dash(s.note)}</td></tr>`).join('')
+  }</tbody></table></div>`;
+}
+
+function foot(p) {
+  const gh = location.hostname.match(/^([^.]+)\.github\.io$/);
+  const repo = gh ? `https://github.com/${gh[1]}/${location.pathname.split('/')[1]}` : '';
+  $('foot').innerHTML = `${p.youtube_playlist ? link(p.youtube_playlist, '유튜브 재생목록') : '유튜브 재생목록 준비 중'} · ${repo ? link(repo, '이 프로젝트 저장소') : '저장소 공개 전'}`;
+}
+</script>
+</body>
+</html>
