@@ -23,7 +23,7 @@ squash-ai-coach/
 
 ## 1. Analysis app (app/index.html) — MVP scope
 
-Runs locally at `http://localhost:8765/app/` via `start.bat` (`python -m http.server 8765` from repo root; Python exists on PATH). Must be usable on Windows Chrome/Edge.
+Runs locally at `http://localhost:8780/app/` via `start.bat` (`python -m http.server 8780` from repo root; Python exists on PATH). Must be usable on Windows Chrome/Edge.
 
 Pose: MediaPipe Tasks Vision `PoseLandmarker` loaded from jsDelivr with an exact pinned version (check the real latest stable with `npm view @mediapipe/tasks-vision version`; pin it). Model: `pose_landmarker_full.task` (Google storage URL; download into `app/models/` and load locally). `runningMode: "VIDEO"`, `numPoses: 2` (game videos have two players).
 
