@@ -1,7 +1,7 @@
 // node tests/check.mjs
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { KEYS, angle, trunkLean, poseAngles, angle3, trunkLean3, poseAngles3, resolveMetric, checkpointValue, judge } from '../app/angles.mjs';
+import { KEYS, angle, trunkLean, poseAngles, angle3, trunkLean3, poseAngles3, stanceRatio, frontSide, resolveMetric, checkpointValue, judge } from '../app/angles.mjs';
 
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
 
@@ -39,6 +39,33 @@ assert.equal(poseAngles3(wl, lm).knee_r, null); // low visibility gates 3D too
 lm[28].visibility = 1;
 assert.equal(poseAngles3(wl, lm).knee_l, null); // all-zero left leg: zero-length segments -> null
 
+// ---- front/back leg + stance ratio ----
+assert.equal(resolveMetric('knee_front', 'R', 'l'), 'knee_l');
+assert.equal(resolveMetric('knee_back', 'R', 'l'), 'knee_r');
+assert.equal(resolveMetric('hip_front', 'L', 'r'), 'hip_r');
+assert.equal(resolveMetric('hip_back', 'L', 'r'), 'hip_l');
+assert.equal(resolveMetric('knee_front', 'R', null), null); // cannot tell -> not measurable
+assert.equal(checkpointValue({ metric: 'knee_front' }, { knee_l: 10, knee_r: 20, front: 'l' }, 'R'), 10);
+assert.equal(checkpointValue({ metric: 'knee_back' }, { knee_l: 10, knee_r: 20, front: 'l' }, 'R'), 20);
+assert.equal(checkpointValue({ metric: 'knee_front' }, { knee_l: 10, knee_r: 20, front: null }, 'R'), null);
+// legs 0.4 long (hip y .4, knee .6, ankle .8); 1000x1000 so pixels = normalized * 1000
+const fl = (yL, yR) => { const m = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: 1 }));
+  Object.assign(m[23], { x: 0.45, y: 0.4 }); Object.assign(m[24], { x: 0.55, y: 0.4 });
+  Object.assign(m[25], { x: 0.45, y: 0.6 }); Object.assign(m[26], { x: 0.55, y: 0.6 });
+  Object.assign(m[27], { x: 0.4, y: yL }); Object.assign(m[28], { x: 0.6, y: yR }); return m; };
+assert.equal(frontSide(fl(0.7, 0.8), 1000, 1000), 'l');  // left ankle higher in image = farther = front
+assert.equal(frontSide(fl(0.8, 0.7), 1000, 1000), 'r');
+assert.equal(frontSide(fl(0.8, 0.81), 1000, 1000), null); // gap 10px < 5% of ~400px leg length
+assert.equal(frontSide(fl(0.8, 0.7).map((q, i) => i === 27 ? { ...q, visibility: 0.1 } : q), 1000, 1000), null);
+near(stanceRatio({ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 0, y: 0 }, { x: 30, y: 0 }), 2);
+near(stanceRatio({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0.6 }, { x: 0, y: 0, z: 0 }, { x: 0.3, y: 0, z: 0 }), 2);
+assert.equal(stanceRatio({ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }), null);
+// 2D must scale by w/h: ankles .1 apart in x, hips .05 apart in x on 2000x1000 -> still 2
+const sl = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: 1 }));
+Object.assign(sl[23], { x: 0.475 }); Object.assign(sl[24], { x: 0.525 }); Object.assign(sl[27], { x: 0.45 }); Object.assign(sl[28], { x: 0.55 });
+near(poseAngles(sl, 2000, 1000).stance_ratio, 2);
+assert.ok(KEYS.includes('stance_ratio'));
+
 // ---- racket-hand aliases ----
 assert.equal(resolveMetric('knee_racket', 'R'), 'knee_r');
 assert.equal(resolveMetric('knee_racket', 'L'), 'knee_l');
@@ -72,7 +99,7 @@ for (const c of cpFile.checkpoints) {
   assert.ok(['angle', 'visual'].includes(c.type), `${c.id}: bad type`);
   for (const k of ['channel', 'title', 'url', 'timestamp']) assert.ok(k in c.source, `${c.id}: source missing "${k}"`);
   if (c.target !== null) assert.ok(['min', 'max'].some(k => typeof c.target[k] === 'number'), `${c.id}: target needs min and/or max`);
-  if (c.type === 'angle') for (const h of ['R', 'L']) assert.ok(KEYS.includes(resolveMetric(c.metric, h)), `${c.id}: unknown metric ${c.metric}`);
+  if (c.type === 'angle') for (const h of ['R', 'L']) for (const f of ['l', 'r']) assert.ok(KEYS.includes(resolveMetric(c.metric, h, f)), `${c.id}: unknown metric ${c.metric}`);
 }
 
 const dir = new URL('../docs/data/', import.meta.url);

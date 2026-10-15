@@ -1,12 +1,18 @@
 // Pure angle math, shared by app/index.html and tests/check.mjs.
 // Points are {x, y} in pixel space (y grows downward, as in images).
 
-export const KEYS = ['knee_l', 'knee_r', 'hip_l', 'hip_r', 'elbow_l', 'elbow_r', 'trunk_lean'];
+export const KEYS = ['knee_l', 'knee_r', 'hip_l', 'hip_r', 'elbow_l', 'elbow_r', 'trunk_lean', 'stance_ratio'];
 
 export const LABELS = {
   knee_l: '무릎 L', knee_r: '무릎 R', hip_l: '엉덩이 L', hip_r: '엉덩이 R',
-  elbow_l: '팔꿈치 L', elbow_r: '팔꿈치 R', trunk_lean: '상체 기울기',
+  elbow_l: '팔꿈치 L', elbow_r: '팔꿈치 R', trunk_lean: '상체 기울기', stance_ratio: '스탠스 비율',
 };
+
+// stance_ratio is a unitless ratio (2 decimals); everything else is degrees (1 decimal).
+export const metricUnit = key => key === 'stance_ratio' ? '' : '°';
+export const metricDecimals = key => key === 'stance_ratio' ? 2 : 1;
+export const fmtMetric = (key, v) => v == null ? '-' : v.toFixed(metricDecimals(key)) + metricUnit(key);
+export const roundMetric = (key, v) => v == null ? null : Number(v.toFixed(metricDecimals(key)));
 
 // MediaPipe pose landmark indices [a, vertex, c]
 export const JOINTS = {
@@ -41,7 +47,29 @@ export function poseAngles(lm, w, h, minVis = 0.5) {
   for (const [k, idx] of Object.entries(JOINTS)) out[k] = seen(idx) ? angle(...idx.map(p)) : null;
   const mid = (i, j) => ({ x: (p(i).x + p(j).x) / 2, y: (p(i).y + p(j).y) / 2 });
   out.trunk_lean = seen([11, 12, 23, 24]) ? trunkLean(mid(23, 24), mid(11, 12)) : null;
+  out.stance_ratio = seen([23, 24, 27, 28]) ? stanceRatio(p(27), p(28), p(23), p(24)) : null;
   return out;
+}
+
+// Distance between ankles / distance between hips (unitless; works for {x,y} pixels and {x,y,z} metres).
+// null if the hips coincide.
+export function stanceRatio(ankleL, ankleR, hipL, hipR) {
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, (a.z ?? 0) - (b.z ?? 0));
+  const hips = dist(hipL, hipR);
+  return hips ? dist(ankleL, ankleR) / hips : null;
+}
+
+// Which leg is the front (wall-side) leg: 'l' | 'r' | null (cannot tell). Uses normalized landmarks `lm`
+// scaled to pixels. The ankle with the smaller image y is farther from the camera, i.e. toward the front wall.
+// ponytail: assumes the camera is behind the player and above the floor (back-wall or rear-corner shot);
+// breaks for side-on or front shots. If the ankle y gap is under 5% of leg length (feet level) -> null.
+export function frontSide(lm, w, h, minVis = 0.5) {
+  if (![23, 24, 25, 26, 27, 28].every(i => lm[i] && (lm[i].visibility ?? 1) >= minVis)) return null;
+  const p = i => ({ x: lm[i].x * w, y: lm[i].y * h });
+  const leg = (a, b, c) => Math.hypot(p(a).x - p(b).x, p(a).y - p(b).y) + Math.hypot(p(b).x - p(c).x, p(b).y - p(c).y);
+  const legLen = (leg(23, 25, 27) + leg(24, 26, 28)) / 2, dy = p(27).y - p(28).y;
+  if (!legLen || Math.abs(dy) < 0.05 * legLen) return null;
+  return dy < 0 ? 'l' : 'r';
 }
 
 // ---- 3D (MediaPipe worldLandmarks: metres, hip-centred, y axis vertical) ----
@@ -71,22 +99,29 @@ export function poseAngles3(wl, vis = wl, minVis = 0.5) {
   const out = {};
   for (const [k, idx] of Object.entries(JOINTS)) out[k] = seen(idx) ? angle3(...idx.map(i => wl[i])) : null;
   out.trunk_lean = seen([11, 12, 23, 24]) ? trunkLean3(mid(23, 24), mid(11, 12)) : null;
+  out.stance_ratio = seen([23, 24, 27, 28]) ? stanceRatio(wl[27], wl[28], wl[23], wl[24]) : null;
   return out;
 }
 
 // ---- checkpoints ----
 
-// 'knee_racket' / 'knee_other' (also hip, elbow) -> concrete key for the racket hand ('R' or 'L').
-export function resolveMetric(metric, hand = 'R') {
-  const m = /^(knee|hip|elbow)_(racket|other)$/.exec(metric || '');
-  if (!m) return metric;
-  const r = hand === 'L' ? 'l' : 'r', o = r === 'r' ? 'l' : 'r';
-  return `${m[1]}_${m[2] === 'racket' ? r : o}`;
+// Aliases -> concrete key. racket/other (knee, hip, elbow) depend on the racket hand ('R' or 'L');
+// front/back (knee, hip) depend on `front` ('l' | 'r' | null, see frontSide) and give null when it is unknown.
+export function resolveMetric(metric, hand = 'R', front = null) {
+  let m = /^(knee|hip|elbow)_(racket|other)$/.exec(metric || '');
+  if (m) {
+    const r = hand === 'L' ? 'l' : 'r', o = r === 'r' ? 'l' : 'r';
+    return `${m[1]}_${m[2] === 'racket' ? r : o}`;
+  }
+  m = /^(knee|hip)_(front|back)$/.exec(metric || '');
+  if (m) return front ? `${m[1]}_${m[2] === 'front' ? front : front === 'l' ? 'r' : 'l'}` : null;
+  return metric;
 }
 
-// Angle value of a checkpoint from an angles object ({knee_l:..}); null if not measured.
+// Value of a checkpoint from an angles object ({knee_l:.., front:'l'}); null if not measured.
 export function checkpointValue(cp, angles, hand = 'R') {
-  return (cp.metric && angles?.[resolveMetric(cp.metric, hand)]) ?? null;
+  const key = cp.metric && resolveMetric(cp.metric, hand, angles?.front);
+  return (key && angles?.[key]) ?? null;
 }
 
 // 'na' = not measurable, 'ref' = no target (value only), else 'pass' | 'fail'. target {min?, max?} or null.

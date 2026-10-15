@@ -1,6 +1,6 @@
 {"version":"v0","handedness_default":"R","checkpoints":[
- {"id":"example_lunge_front_knee","group":"런지","name":"예시 런지 앞무릎 각도","type":"angle",
-  "metric":"knee_racket","target":{"min":80,"max":100},"view":"back_diagonal",
+ {"id":"example_lunge_front_knee","group":"런지","name":"예시 런지 앞다리 무릎 각도","type":"angle",
+  "metric":"knee_front","target":{"min":80,"max":100},"view":"back_diagonal",
   "confidence":"하","note":"스키마 확인용 예시. 실제 기준은 메인 세션이 채운다.",
   "source":{"channel":"","title":"","url":"","timestamp":""}},
  {"id":"example_split_step_timing","group":"무빙","name":"예시 상대 타구 순간 스플릿 스텝","type":"visual",
