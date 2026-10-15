@@ -1,0 +1,14 @@
+{"version":"v0","handedness_default":"R","checkpoints":[
+ {"id":"example_lunge_front_knee","group":"런지","name":"예시 런지 앞무릎 각도","type":"angle",
+  "metric":"knee_racket","target":{"min":80,"max":100},"view":"back_diagonal",
+  "confidence":"하","note":"스키마 확인용 예시. 실제 기준은 메인 세션이 채운다.",
+  "source":{"channel":"","title":"","url":"","timestamp":""}},
+ {"id":"example_split_step_timing","group":"무빙","name":"예시 상대 타구 순간 스플릿 스텝","type":"visual",
+  "metric":null,"target":null,"view":"side",
+  "confidence":"하","note":"자동 판정 없음. 통과/미달/해당없음을 직접 표시.",
+  "source":{"channel":"","title":"","url":"","timestamp":""}},
+ {"id":"example_swing_elbow_baseline","group":"스윙","name":"예시 스윙 팔꿈치 각도 (기준선 비교용)","type":"angle",
+  "metric":"elbow_racket","target":null,"view":"side",
+  "confidence":"하","note":"target이 null이면 값만 표시.",
+  "source":{"channel":"","title":"","url":"","timestamp":""}}
+]}
