@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>스쿼시 영상 비교</title>
+<style>
+  :root { --bg:#111418; --panel:#1b2027; --line:#2c333d; --text:#e8ecf1; --dim:#9aa4b2; --p1:#00d8ff; --p2:#ff9f1c; --accent:#ffd400; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 "Malgun Gothic", "Segoe UI", sans-serif; }
+  header { display:flex; gap:12px; align-items:center; flex-wrap:wrap; padding:10px 16px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:18px; margin:0 12px 0 0; }
+  a { color:var(--accent); }
+  #status { color:var(--dim); }
+  #panels { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px; padding:16px; }
+  @media (max-width: 900px) { #panels { grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:2px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .panel.focus { border-color:var(--accent); }
+  .panel h2 { font-size:15px; margin:0 0 8px; }
+  .panel h2 .fname { color:var(--dim); font-weight:400; font-size:13px; }
+  .drop { min-height:160px; display:flex; align-items:center; justify-content:center; border:2px dashed var(--line); border-radius:8px; background:#000; }
+  .drop.over { border-color:var(--accent); }
+  .stage { position:relative; display:inline-block; line-height:0; }
+  .stage video { display:block; max-width:100%; max-height:56vh; }
+  .stage canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  .hint { color:var(--dim); padding:30px; text-align:center; }
+  .err { display:none; margin:8px 0; padding:10px 14px; background:#3a1d1d; border:1px solid #a33; border-radius:6px; font-size:13px; }
+  .err pre { background:#000; padding:8px; user-select:all; white-space:pre-wrap; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+  .info { font:600 15px/1.4 Consolas, monospace; margin-top:8px; }
+  button, select, input { font:inherit; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:4px 10px; }
+  input[type=checkbox], input[type=radio] { padding:0; }
+  button { cursor:pointer; }
+  button:hover { border-color:var(--dim); }
+  input[type=number] { width:68px; }
+  .p1 { color:var(--p1); } .p2 { color:var(--p2); }
+  .chip { display:inline-block; border:1px solid var(--accent); color:var(--accent); border-radius:999px; padding:0 10px; font-size:13px; font-weight:700; }
+  .dim { color:var(--dim); font-size:13px; }
+  #cmpBox { margin:0 16px 16px; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 14px; }
+  #cmpBox h2 { font-size:14px; color:var(--dim); margin:0 0 6px; font-weight:600; }
+  #cmp { border-collapse:collapse; font-size:17px; min-width:min(100%, 560px); }
+  #cmp th, #cmp td { padding:3px 14px 3px 0; text-align:right; }
+  #cmp th:first-child, #cmp td:first-child { text-align:left; }
+  #cmp td { font-family:Consolas, monospace; }
+  kbd { border:1px solid var(--line); border-radius:4px; padding:0 5px; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>스쿼시 영상 비교</h1>
+  <a href="./">분석 화면</a>
+  <label>라켓 손 <select id="hand"><option value="R">오른손</option><option value="L">왼손</option></select></label>
+  <label>각도 <select id="mode"><option value="2d">2D 화면</option><option value="3d">3D 추정</option></select></label>
+  <span id="modeTag" class="chip"></span>
+  <label><input type="checkbox" id="sync"> 동기 이동</label>
+  <button id="save">비교 이미지 저장</button>
+  <span id="status">모델 불러오는 중...</span>
+</header>
+<div class="dim" style="padding:6px 16px 0">패널을 눌러 선택(노란 테두리)한 뒤
+  <kbd>←</kbd><kbd>→</kbd> 1프레임 · <kbd>Shift</kbd>+화살표 10프레임 · <kbd>Space</kbd> 재생/정지.
+  동기 이동을 켜면 두 영상이 함께 움직입니다. 두 영상 모두 "여기를 맞춤점으로"를 누르면 그 두 지점을 기준으로 맞춥니다(안 누르면 켠 순간의 위치 차이를 유지).</div>
+<div id="panels"></div>
+<section id="cmpBox">
+  <h2>현재 프레임 각도 비교 (선택한 사람 기준)</h2>
+  <table id="cmp"></table>
+</section>
+
+<template id="tpl">
+  <div class="panel">
+    <h2><span class="title"></span> <span class="fname"></span></h2>
+    <div class="drop">
+      <div class="hint">영상 파일을 끌어다 놓거나 아래에서 선택하세요.</div>
+      <div class="stage" hidden><video playsinline muted></video><canvas></canvas></div>
+    </div>
+    <div class="err"></div>
+    <div class="info">프레임 - / - · 00:00.000</div>
+    <div class="row">
+      <input type="file" accept="video/*">
+      <label>fps <input type="number" class="fps" value="60" min="1" max="1000"></label>
+    </div>
+    <div class="row">
+      <button class="play">재생/정지</button>
+      <button data-step="-10">-10</button><button data-step="-1">-1</button>
+      <button data-step="1">+1</button><button data-step="10">+10</button>
+    </div>
+    <div class="row">
+      <label class="p1"><input type="radio" class="person" value="0" checked> 1번 (하늘색)</label>
+      <label class="p2"><input type="radio" class="person" value="1"> 2번 (주황)</label>
+    </div>
+    <div class="row"><button class="anchor">여기를 맞춤점으로</button><span class="anchorInfo dim">맞춤점 없음</span></div>
+  </div>
+</template>
+
+<script type="module">
+import { KEYS, LABELS, resolveMetric, fmtMetric, metricDecimals } from './angles.mjs';
+import { MP_VERSION, COLORS, MODE_LABEL, loadPose, toPeople, personAngles, createTracker,
+  drawSkeleton, drawKnee, drawBadge, loadSetting, saveSetting } from './pose.mjs';
+
+const $ = id => document.getElementById(id);
+const status = t => { $('status').textContent = t; };
+let landmarker = null, connections = [];
+const hand = () => $('hand').value, mode = () => $('mode').value;
+const sync = () => $('sync').checked;
+$('hand').value = loadSetting('hand', 'R');
+$('mode').value = loadSetting('mode', '2d');
+
+// ---- panels ----
+const panels = [];
+let focused = null;
+let offset = 0; // seconds: time in panel B = time in panel A + offset (used while sync is on)
+
+function makePanel(tag, title) {
+  const root = document.getElementById('tpl').content.firstElementChild.cloneNode(true);
+  $('panels').append(root);
+  const q = s => root.querySelector(s);
+  const P = { tag, root, video: q('video'), overlay: q('canvas'), people: [null, null], tracker: createTracker(), anchor: null, url: null, name: '' };
+  P.ctx = P.overlay.getContext('2d');
+  q('.title').textContent = title;
+  root.querySelectorAll('.person').forEach(r => r.name = 'person' + tag);
+  const v = P.video;
+
+  P.fps = () => Number(q('.fps').value) || 60;
+  P.sel = () => Number(root.querySelector('.person:checked').value);
+  P.total = () => v.duration ? Math.floor(v.duration * P.fps()) : 0;
+  P.frame = () => Math.min(Math.floor(v.currentTime * P.fps() + 1e-3), Math.max(P.total() - 1, 0));
+  P.angles = () => personAngles(P.people[P.sel()], mode(), P.overlay.width, P.overlay.height);
+  P.q = q;
+
+  // seek to the centre of the frame that contains time t (clamped to the clip)
+  P.seekTime = t => {
+    if (!v.duration) return Promise.resolve();
+    const f = Math.max(0, Math.min(Math.floor(t * P.fps()), P.total() - 1)), tt = (f + 0.5) / P.fps();
+    return new Promise(res => {
+      if (Math.abs(v.currentTime - tt) < 1e-6) return res();
+      v.addEventListener('seeked', () => res(), { once: true });
+      v.currentTime = tt;
+    });
+  };
+  P.detect = () => {
+    if (!landmarker || v.readyState < 2) return;
+    P.people = P.tracker.assign(toPeople(landmarker.detect(v)));
+  };
+  P.render = () => {
+    const W = P.overlay.width, H = P.overlay.height, s = P.sel(), c = P.ctx;
+    c.clearRect(0, 0, W, H);
+    P.people.forEach((p, i) => p && drawSkeleton(c, W, H, p.lm, COLORS[i], i === s, connections));
+    const p = P.people[s], a = P.angles();
+    if (p) for (const k of ['knee_l', 'knee_r']) drawKnee(c, W, H, p.lm, k, COLORS[s], a[k]);
+    drawBadge(c, H, `${tag} · 각도: ${MODE_LABEL[mode()]}`);
+    const t = v.currentTime || 0, m = Math.floor(t / 60);
+    q('.info').textContent = `프레임 ${v.duration ? P.frame() : '-'} / ${P.total() || '-'} · ${P.fps()} fps · ${String(m).padStart(2, '0')}:${(t - m * 60).toFixed(3).padStart(6, '0')}`;
+  };
+  P.refresh = () => { P.detect(); P.render(); updateTable(); };
+
+  // file loading
+  P.open = file => {
+    if (!file) return;
+    if (P.url) URL.revokeObjectURL(P.url);
+    P.name = file.name; root.querySelector('.fname').textContent = file.name;
+    P.people = [null, null]; P.tracker.reset(); P.anchor = null; q('.anchorInfo').textContent = '맞춤점 없음';
+    q('.err').style.display = 'none';
+    P.url = URL.createObjectURL(file); v.src = P.url;
+  };
+  const fail = () => {
+    q('.stage').hidden = true; q('.hint').hidden = false;
+    q('.err').style.display = 'block';
+    q('.err').innerHTML = `<b>이 영상은 브라우저에서 열 수 없습니다.</b> 아이폰 HEVC(H.265) 영상일 가능성이 큽니다. 명령 프롬프트에서 변환한 뒤 out.mp4를 여세요.
+      <pre>ffmpeg -i in.mov -c:v libx264 -crf 18 -an out.mp4</pre>`;
+  };
+  v.onerror = fail;
+  v.onloadedmetadata = () => {
+    if (!v.videoWidth) return fail();
+    P.overlay.width = v.videoWidth; P.overlay.height = v.videoHeight;
+    q('.hint').hidden = true; q('.stage').hidden = false;
+    P.seekTime(0);
+  };
+  v.onseeked = P.refresh;
+  const loop = () => { P.refresh(); if (!v.paused) v.requestVideoFrameCallback(loop); };
+  v.onplay = () => v.requestVideoFrameCallback(loop);
+  v.onpause = P.refresh;
+  v.onended = () => { if (sync()) panels.forEach(p => p.video.pause()); };
+
+  q('input[type=file]').onchange = e => P.open(e.target.files[0]);
+  const drop = q('.drop');
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+  drop.ondragleave = () => drop.classList.remove('over');
+  drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); P.open(e.dataTransfer.files[0]); };
+  root.addEventListener('pointerdown', () => focus(P));
+
+  // controls
+  q('.play').onclick = () => togglePlay(P);
+  root.querySelectorAll('[data-step]').forEach(b => b.onclick = () => step(P, Number(b.dataset.step)));
+  root.querySelectorAll('.person').forEach(r => r.onchange = () => { P.render(); updateTable(); });
+  q('.fps').onchange = () => { P.render(); updateTable(); };
+  q('.anchor').onclick = () => {
+    if (!v.duration) return;
+    P.anchor = v.currentTime;
+    q('.anchorInfo').textContent = `맞춤점: 프레임 ${P.frame()} (${P.anchor.toFixed(3)}초)`;
+    if (panels.every(p => p.anchor != null)) { offset = panels[1].anchor - panels[0].anchor; if (sync()) follow(P); }
+  };
+  panels.push(P);
+  return P;
+}
+const [A, B] = [makePanel('A', 'A 왼쪽'), makePanel('B', 'B 오른쪽')];
+focus(A);
+
+function focus(P) { focused = P; panels.forEach(p => p.root.classList.toggle('focus', p === P)); }
+const other = P => P === A ? B : A;
+const offsetFrom = P => P === A ? offset : -offset; // other's time = P's time + offsetFrom(P)
+
+// Move the other panel to match P (only when sync is on).
+async function follow(P) {
+  if (!sync()) return;
+  await other(P).seekTime(P.video.currentTime + offsetFrom(P));
+}
+async function step(P, n) {
+  const v = P.video;
+  if (!v.duration) return;
+  panels.forEach(p => p.video.pause());
+  await P.seekTime((P.frame() + n + 0.5) / P.fps());
+  await follow(P);
+}
+async function togglePlay(P) {
+  const v = P.video;
+  if (!sync()) return v.paused ? v.play() : v.pause();
+  if (!v.paused || !other(P).video.paused) { panels.forEach(p => p.video.pause()); return follow(P); }
+  await follow(P);
+  panels.forEach(p => p.video.duration && p.video.play());
+}
+
+$('sync').onchange = () => {
+  if (!sync()) return;
+  offset = panels.every(p => p.anchor != null) ? B.anchor - A.anchor : B.video.currentTime - A.video.currentTime;
+};
+document.addEventListener('keydown', e => {
+  if (e.target.matches?.('input:not([type=radio]), select, textarea')) return;
+  if (e.code === 'Space') { e.preventDefault(); togglePlay(focused); }
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); step(focused, (e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 10 : 1)); }
+});
+
+// ---- settings ----
+function onSettings() {
+  $('modeTag').textContent = `각도: ${MODE_LABEL[mode()]}`;
+  panels.forEach(p => p.render()); updateTable();
+}
+$('hand').onchange = () => { saveSetting('hand', hand()); onSettings(); };
+$('mode').onchange = () => { saveSetting('mode', mode()); onSettings(); };
+
+// ---- comparison table ----
+const isRacket = k => k === resolveMetric('knee_racket', hand()) || k === resolveMetric('hip_racket', hand()) || k === resolveMetric('elbow_racket', hand());
+const rowLabel = k => LABELS[k] + (isRacket(k) ? ' (라켓)' : '');
+function tableRows() {
+  const a = A.angles(), b = B.angles();
+  return KEYS.map(k => [rowLabel(k), fmtMetric(k, a[k]), fmtMetric(k, b[k]), a[k] == null || b[k] == null ? '-' : (b[k] - a[k] >= 0 ? '+' : '') + fmtMetric(k, b[k] - a[k])]);
+}
+function updateTable() {
+  $('cmp').innerHTML = '<tr><th>항목</th><th>A</th><th>B</th><th>차이 (B-A)</th></tr>' +
+    tableRows().map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('');
+}
+
+// ---- save comparison PNG ----
+$('save').onclick = () => {
+  if (!A.video.videoWidth || !B.video.videoWidth) return status('두 영상을 모두 여세요.');
+  const H = Math.min(Math.max(A.video.videoHeight, B.video.videoHeight), 1080);
+  const wA = Math.round(A.video.videoWidth * H / A.video.videoHeight), wB = Math.round(B.video.videoWidth * H / B.video.videoHeight);
+  const W = wA + wB, fs = Math.max(20, Math.round(W / 55)), lh = Math.round(fs * 1.5), rows = tableRows();
+  const head = `각도: ${MODE_LABEL[mode()]} · 라켓 손: ${hand() === 'R' ? '오른손' : '왼손'}`;
+  const c = document.createElement('canvas'); c.width = W; c.height = H + lh * (rows.length + 3);
+  const g = c.getContext('2d');
+  g.fillStyle = '#111418'; g.fillRect(0, 0, c.width, c.height);
+  [[A, 0, wA], [B, wA, wB]].forEach(([P, x, w]) => { g.drawImage(P.video, x, 0, w, H); g.drawImage(P.overlay, x, 0, w, H); });
+  g.textBaseline = 'top'; g.font = `700 ${fs}px "Segoe UI", "Malgun Gothic", sans-serif`;
+  g.fillStyle = '#ffd400'; g.fillText(head, fs * 0.6, H + lh * 0.4);
+  const cols = [fs * 0.6, W * 0.38, W * 0.58, W * 0.78];
+  g.fillStyle = '#9aa4b2';
+  ['항목', 'A', 'B', '차이 (B-A)'].forEach((t, i) => g.fillText(t, cols[i], H + lh * 1.4));
+  g.fillStyle = '#e8ecf1';
+  rows.forEach((r, j) => r.forEach((t, i) => g.fillText(t, cols[i], H + lh * (2.4 + j))));
+  const now = new Date(), p = n => String(n).padStart(2, '0');
+  const stamp = `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`;
+  c.toBlob(blob => {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `compare-${stamp}.png`; a.click();
+    status(`저장: compare-${stamp}.png`);
+  }, 'image/png');
+};
+
+// ---- model (IMAGE mode: stateless, one landmarker serves both panels) ----
+onSettings();
+loadPose('IMAGE').then(r => {
+  ({ landmarker, connections } = r);
+  status(`준비됨 (MediaPipe ${MP_VERSION})`);
+  panels.forEach(p => p.video.readyState >= 2 && p.refresh());
+}).catch(e => { status('모델을 불러오지 못했습니다: ' + e.message); console.error(e); });
+</script>
+</body>
+</html>
