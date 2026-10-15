@@ -43,12 +43,26 @@
   #chart { width:100%; display:block; cursor:crosshair; }
   .dim { color:var(--dim); font-size:13px; }
   kbd { border:1px solid var(--line); border-radius:4px; padding:0 5px; font-size:12px; }
+  a { color:var(--accent); }
+  .chip { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:0 10px; font-size:13px; }
+  #modeTag { color:var(--accent); border-color:var(--accent); font-weight:700; }
+  .cp { border-top:1px solid var(--line); padding:8px 0; font-size:13px; }
+  .cp b { font-size:14px; }
+  .cp .st { float:right; }
+  .st.pass { color:#5fd38d; border-color:#5fd38d; } .st.fail { color:#ff6b6b; border-color:#ff6b6b; }
+  .cp button { padding:2px 8px; font-size:12px; }
+  .cp button.on { border-color:var(--accent); color:var(--accent); }
+  .cp .src { font-size:11px; color:var(--dim); }
 </style>
 </head>
 <body>
 <header>
   <h1>스쿼시 자세 분석</h1>
   <input type="file" id="file" accept="video/*">
+  <label>라켓 손 <select id="hand"><option value="R">오른손</option><option value="L">왼손</option></select></label>
+  <label>각도 <select id="mode"><option value="2d">2D 화면</option><option value="3d">3D 추정</option></select></label>
+  <span id="modeTag" class="chip"></span>
+  <a href="compare.html">영상 비교 화면</a>
   <span id="status">모델 불러오는 중...</span>
 </header>
 <main>
@@ -72,7 +86,7 @@
     <div id="chartBox">
       <div class="row" style="margin-top:0">
         <label>그래프 <select id="chartKey"></select></label>
-        <span class="dim">선택한 사람 기준 · 그래프를 누르면 그 프레임으로 이동</span>
+        <span class="dim">선택한 사람 기준 · 그래프를 누르면 그 프레임으로 이동</span> <span id="chartMode" class="dim"></span>
       </div>
       <svg id="chart" viewBox="0 0 1000 220"></svg>
     </div>
@@ -86,6 +100,11 @@
     <section>
       <h2>현재 프레임 각도</h2>
       <table id="angles"></table>
+    </section>
+    <section>
+      <h2>체크포인트</h2>
+      <label>그룹 <select id="cpGroup"></select></label>
+      <div id="cpList" class="dim">불러오는 중...</div>
     </section>
     <section>
       <h2>이 프레임 담기 (C)</h2>
@@ -103,40 +122,39 @@
 </main>
 
 <script type="module">
-import { KEYS, LABELS, JOINTS, poseAngles } from './angles.mjs';
+import { KEYS, LABELS, checkpointValue, judge, resolveMetric, metricUnit, fmtMetric, roundMetric, metricDecimals } from './angles.mjs';
+import { MP_VERSION, COLORS, MODE_LABEL, loadPose, toPeople, personAngles, createTracker,
+  drawSkeleton, drawKnee, drawBadge, loadSetting, saveSetting } from './pose.mjs';
 
-const MP_VERSION = '1.1.0';
-const CDN = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}`;
-const COLORS = ['#00d8ff', '#ff9f1c'];
 const $ = id => document.getElementById(id);
 const video = $('video'), overlay = $('overlay'), ctx = overlay.getContext('2d');
 
 let landmarker = null, connections = [], lastTs = 0;
-let persons = [null, null], prevCenters = null;
-let series = new Map(), analyzedStride = null, analyzing = false, cancelled = false;
+const tracker = createTracker();
+let persons = [null, null];
+let series = new Map(), analyzedStride = null, analyzedMode = null, analyzing = false, cancelled = false;
 let captures = [], videoName = '', videoUrl = null;
+let cps = null, cpHtml = '';
+const marks = new Map(); // frame -> {checkpointId: 'pass'|'fail'|'skip'} for type "visual"
 
 const fps = () => Number($('fps').value) || 60;
 const sel = () => Number(document.querySelector('input[name=person]:checked').value);
+const hand = () => $('hand').value;
+const mode = () => $('mode').value;
 const total = () => video.duration ? Math.floor(video.duration * fps()) : 0;
 const curFrame = () => Math.min(Math.floor(video.currentTime * fps() + 1e-3), Math.max(total() - 1, 0));
-const r1 = v => v == null ? null : Math.round(v * 10) / 10;
 const status = t => { $('status').textContent = t; };
+const angles = p => personAngles(p, mode(), overlay.width, overlay.height);
 
 for (const k of KEYS) $('chartKey').add(new Option(LABELS[k], k));
 $('chartKey').value = 'knee_r';
+$('hand').value = loadSetting('hand', 'R');
+$('mode').value = loadSetting('mode', '2d');
 
 // ---- model ----
 (async () => {
   try {
-    const { FilesetResolver, PoseLandmarker } = await import(`${CDN}/vision_bundle.mjs`);
-    const fileset = await FilesetResolver.forVisionTasks(`${CDN}/wasm`);
-    const make = delegate => PoseLandmarker.createFromOptions(fileset, {
-      baseOptions: { modelAssetPath: './models/pose_landmarker_full.task', delegate },
-      runningMode: 'VIDEO', numPoses: 2,
-    });
-    try { landmarker = await make('GPU'); } catch { landmarker = await make('CPU'); }
-    connections = PoseLandmarker.POSE_CONNECTIONS.filter(c => c.start >= 11 && c.end >= 11);
+    ({ landmarker, connections } = await loadPose('VIDEO'));
     status(`준비됨 (MediaPipe ${MP_VERSION})`);
     if (video.readyState >= 2) { detect(); render(); }
   } catch (e) {
@@ -145,13 +163,23 @@ $('chartKey').value = 'knee_r';
   }
 })();
 
+// ---- checkpoints data ----
+fetch('./checkpoints.json').then(r => r.json()).then(j => {
+  cps = j;
+  const groups = [...new Set(j.checkpoints.map(c => c.group))];
+  $('cpGroup').add(new Option('전체', ''));
+  for (const g of groups) $('cpGroup').add(new Option(g, g));
+  if (!loadSetting('hand', '')) { $('hand').value = j.handedness_default || 'R'; }
+  render();
+}).catch(e => { $('cpList').textContent = 'checkpoints.json을 불러오지 못했습니다: ' + e.message; });
+
 // ---- video loading ----
 function openFile(file) {
   if (!file) return;
   if (videoUrl) URL.revokeObjectURL(videoUrl);
   videoName = file.name;
   $('label').value ||= file.name.replace(/\.[^.]+$/, '');
-  series = new Map(); analyzedStride = null; captures = []; persons = [null, null]; prevCenters = null;
+  series = new Map(); analyzedStride = null; analyzedMode = null; captures = []; persons = [null, null]; tracker.reset(); marks.clear();
   renderCaptures(); drawChart();
   $('err').style.display = 'none';
   videoUrl = URL.createObjectURL(file);
@@ -199,76 +227,59 @@ video.onpause = () => { detect(); render(); };
 function detect() {
   if (!landmarker || video.readyState < 2) return persons;
   lastTs = Math.max(lastTs + 1, Math.round(performance.now())); // VIDEO mode needs increasing timestamps
-  const list = landmarker.detectForVideo(video, lastTs).landmarks || [];
-  persons = assign(list);
+  persons = tracker.assign(toPeople(landmarker.detectForVideo(video, lastTs)));
   return persons;
-}
-// Keep person 1/2 stable across frames: match by hip center to the previous frame.
-// ponytail: nearest-center matching only; breaks when players cross. Add re-id if that matters.
-function assign(list) {
-  const center = lm => ({ x: (lm[23].x + lm[24].x) / 2, y: (lm[23].y + lm[24].y) / 2 });
-  const d = (a, b) => (a && b) ? Math.hypot(a.x - b.x, a.y - b.y) : 0;
-  let out = [list[0] || null, list[1] || null];
-  if (prevCenters) {
-    const c = out.map(lm => lm && center(lm));
-    const keep = d(c[0], prevCenters[0]) + d(c[1], prevCenters[1]);
-    const swap = d(c[0], prevCenters[1]) + d(c[1], prevCenters[0]);
-    if (list.length === 1 && prevCenters[1] && (!prevCenters[0] || d(c[0], prevCenters[1]) < d(c[0], prevCenters[0]))) out = [null, out[0]];
-    else if (list.length === 2 && swap < keep) out = [out[1], out[0]];
-  }
-  prevCenters = out.map((lm, i) => lm ? center(lm) : prevCenters?.[i] || null);
-  return out;
 }
 
 // ---- drawing ----
 function render() {
   const W = overlay.width, H = overlay.height, s = sel();
   ctx.clearRect(0, 0, W, H);
-  persons.forEach((lm, i) => lm && drawSkeleton(lm, COLORS[i], i === s));
-  const lm = persons[s];
-  if (lm) for (const k of ['knee_l', 'knee_r']) drawKnee(lm, k, COLORS[s]);
-  const a = lm ? poseAngles(lm, W, H) : {};
-  $('angles').innerHTML = KEYS.map(k => `<tr><td>${LABELS[k]}</td><td>${a[k] == null ? '-' : a[k].toFixed(1) + '°'}</td></tr>`).join('');
+  persons.forEach((p, i) => p && drawSkeleton(ctx, W, H, p.lm, COLORS[i], i === s, connections));
+  const p = persons[s], a = angles(p);
+  if (p) for (const k of ['knee_l', 'knee_r']) drawKnee(ctx, W, H, p.lm, k, COLORS[s], a[k]);
+  drawBadge(ctx, H, `각도: ${MODE_LABEL[mode()]}`);
+  $('angles').innerHTML = KEYS.map(k => `<tr><td>${LABELS[k]}</td><td>${fmtMetric(k, a[k])}</td></tr>`).join('');
   const t = video.currentTime || 0, m = Math.floor(t / 60);
   $('info').textContent = `프레임 ${video.duration ? curFrame() : '-'} / ${total() || '-'} · ${fps()} fps · ${String(m).padStart(2, '0')}:${(t - m * 60).toFixed(3).padStart(6, '0')}`;
+  $('modeTag').textContent = `각도: ${MODE_LABEL[mode()]}`;
   updateCursor();
+  renderCheckpoints(a);
 }
-function drawSkeleton(lm, color, selected) {
-  const W = overlay.width, H = overlay.height, lw = Math.max(4, H / 130) * (selected ? 1.3 : 1);
-  ctx.lineCap = 'round';
-  ctx.globalAlpha = selected ? 1 : 0.75;
-  for (const { start, end } of connections) {
-    ctx.beginPath(); ctx.moveTo(lm[start].x * W, lm[start].y * H); ctx.lineTo(lm[end].x * W, lm[end].y * H);
-    ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.lineWidth = lw + 4; ctx.stroke(); // dark outline: readable on bright walls
-    ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.stroke();
-  }
-  ctx.fillStyle = '#fff';
-  for (let i = 11; i < lm.length; i++) { ctx.beginPath(); ctx.arc(lm[i].x * W, lm[i].y * H, lw * 0.9, 0, 7); ctx.fill(); }
-  ctx.globalAlpha = 1;
+
+// ---- checkpoints panel ----
+const STATUS_KO = { pass: '통과', fail: '미달', na: '측정 불가', ref: '기준선 비교', skip: '해당없음', unset: '미판정' };
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const fmtTarget = (t, u) => !t ? '기준 없음' : t.min != null && t.max != null ? `${t.min}~${t.max}${u}` : t.min != null ? `${t.min}${u} 이상` : `${t.max}${u} 이하`;
+const visibleCps = () => cps ? cps.checkpoints.filter(c => !$('cpGroup').value || c.group === $('cpGroup').value) : [];
+function evalCp(cp, a, frame) {
+  if (cp.type === 'visual') return { value: null, status: marks.get(frame)?.[cp.id] || 'unset' };
+  const value = checkpointValue(cp, a, hand());
+  return { value, status: judge(value, cp.target) };
 }
-function drawKnee(lm, key, color) {
-  const W = overlay.width, H = overlay.height;
-  const deg = poseAngles(lm, W, H)[key];
-  if (deg == null) return;
-  const [a, b, c] = JOINTS[key].map(i => ({ x: lm[i].x * W, y: lm[i].y * H }));
-  const r = H / 14, t1 = Math.atan2(a.y - b.y, a.x - b.x);
-  let diff = Math.atan2(c.y - b.y, c.x - b.x) - t1;
-  if (diff > Math.PI) diff -= 2 * Math.PI; if (diff < -Math.PI) diff += 2 * Math.PI;
-  ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.arc(b.x, b.y, r, t1, t1 + diff, diff < 0); ctx.closePath();
-  ctx.fillStyle = 'rgba(255,212,0,.35)'; ctx.fill();
-  ctx.beginPath(); ctx.arc(b.x, b.y, r, t1, t1 + diff, diff < 0);
-  ctx.strokeStyle = '#ffd400'; ctx.lineWidth = Math.max(4, H / 150); ctx.stroke();
-  // label on the outside of the knee (opposite the angle's bisector)
-  const mid = t1 + diff / 2 + Math.PI, fs = Math.round(H / 16);
-  const text = `${key.endsWith('_l') ? 'L' : 'R'} ${Math.round(deg)}°`;
-  ctx.font = `700 ${fs}px "Segoe UI", sans-serif`;
-  const tw = ctx.measureText(text).width, pad = fs * 0.3;
-  let x = b.x + Math.cos(mid) * r * 1.5 - tw / 2, y = b.y + Math.sin(mid) * r * 1.5 - fs / 2;
-  x = Math.max(4, Math.min(x, W - tw - 2 * pad - 4)); y = Math.max(4, Math.min(y, H - fs - 2 * pad - 4));
-  ctx.fillStyle = 'rgba(0,0,0,.75)'; ctx.fillRect(x, y, tw + 2 * pad, fs + 2 * pad);
-  ctx.strokeStyle = color; ctx.lineWidth = Math.max(2, H / 360); ctx.strokeRect(x, y, tw + 2 * pad, fs + 2 * pad);
-  ctx.fillStyle = '#fff'; ctx.textBaseline = 'top'; ctx.fillText(text, x + pad, y + pad * 1.1);
+function renderCheckpoints(a) {
+  if (!cps) return;
+  const f = video.duration ? curFrame() : 0;
+  const html = visibleCps().map(cp => {
+    const { value, status: st } = evalCp(cp, a, f), src = cp.source || {};
+    const srcText = esc([src.channel, src.title, src.timestamp].filter(Boolean).join(' · '));
+    const srcHtml = /^https?:\/\//.test(src.url || '') ? `<a href="${esc(src.url)}" target="_blank" rel="noopener">${srcText || '근거 링크'}</a>` : srcText;
+    const body = cp.type === 'visual'
+      ? ['pass', 'fail', 'skip'].map(s => `<button data-id="${esc(cp.id)}" data-s="${s}" class="${st === s ? 'on' : ''}">${STATUS_KO[s]}</button>`).join(' ')
+      : `값 ${fmtMetric(resolveMetric(cp.metric, hand(), a.front), value)} · 목표 ${fmtTarget(cp.target, metricUnit(cp.metric))}`;
+    return `<div class="cp"><b>${esc(cp.name)}</b> <span class="chip st ${st}">${STATUS_KO[st]}</span><div class="dim">${body}</div>` +
+      `<div class="src">${esc(cp.confidence ? '신뢰도 ' + cp.confidence : '')}${srcHtml ? ' · ' + srcHtml : ''}</div></div>`;
+  }).join('') || '<p class="dim">항목이 없습니다.</p>';
+  if (html !== cpHtml) { $('cpList').innerHTML = html; cpHtml = html; }
 }
+$('cpList').onclick = e => {
+  const b = e.target.closest('button[data-id]');
+  if (!b || !video.duration) return;
+  const f = curFrame(), m = marks.get(f) || {};
+  if (m[b.dataset.id] === b.dataset.s) delete m[b.dataset.id]; else m[b.dataset.id] = b.dataset.s;
+  marks.set(f, m); render();
+};
+$('cpGroup').onchange = render;
 
 // ---- controls ----
 $('play').onclick = () => video.paused ? video.play() : video.pause();
@@ -277,6 +288,8 @@ function step(n) { if (!video.duration || analyzing) return; video.pause(); seek
 document.querySelectorAll('input[name=person]').forEach(r => r.onchange = () => { render(); drawChart(); });
 $('fps').onchange = () => render();
 $('chartKey').onchange = drawChart;
+$('hand').onchange = () => { saveSetting('hand', hand()); render(); };
+$('mode').onchange = () => { saveSetting('mode', mode()); render(); drawChart(); };
 document.addEventListener('keydown', e => {
   if (e.target.matches?.('input:not([type=radio]), select, textarea') || !video.duration) return;
   if (e.code === 'Space') { e.preventDefault(); if (!analyzing) $('play').click(); }
@@ -290,18 +303,18 @@ $('analyze').onclick = async () => {
   if (!landmarker) return status('모델이 아직 준비되지 않았습니다.');
   const stride = Math.max(1, Number($('stride').value) || 2), n = total();
   analyzing = true; cancelled = false; video.pause();
-  series = new Map(); prevCenters = null; analyzedStride = stride;
-  $('prog').hidden = $('cancel').hidden = false; $('analyze').disabled = true;
+  series = new Map(); tracker.reset(); analyzedStride = stride; analyzedMode = mode();
+  $('prog').hidden = $('cancel').hidden = false; $('analyze').disabled = true; $('mode').disabled = true;
   for (let f = 0; f < n && !cancelled; f += stride) {
     await seekFrame(f);
     const ps = detect(); render();
-    series.set(f, ps.map(lm => lm ? poseAngles(lm, overlay.width, overlay.height) : null));
+    series.set(f, ps.map(p => p ? angles(p) : null));
     $('prog').value = f / n;
     if (f % (stride * 10) === 0) drawChart();
   }
   analyzing = false;
-  $('prog').hidden = $('cancel').hidden = true; $('analyze').disabled = false;
-  status(`${cancelled ? '분석 취소됨' : '분석 완료'}: ${series.size}개 프레임`);
+  $('prog').hidden = $('cancel').hidden = true; $('analyze').disabled = false; $('mode').disabled = false;
+  status(`${cancelled ? '분석 취소됨' : '분석 완료'}: ${series.size}개 프레임 (${MODE_LABEL[analyzedMode]})`);
   drawChart();
 };
 $('cancel').onclick = () => { cancelled = true; };
@@ -309,11 +322,16 @@ $('cancel').onclick = () => { cancelled = true; };
 // ---- chart ----
 const CW = 1000, CH = 220, PL = 44, PR = 10, PT = 10, PB = 24;
 const cx = f => PL + f / Math.max(total() - 1, 1) * (CW - PL - PR);
-const cy = v => CH - PB - v / 180 * (CH - PT - PB);
+const RATIO_MAX = 3; // stance_ratio axis 0..3
+const chartMax = key => key === 'stance_ratio' ? RATIO_MAX : 180;
+let cy = v => v;
 function drawChart() {
-  const key = $('chartKey').value, s = sel(), svg = $('chart');
+  const key = $('chartKey').value, s = sel(), svg = $('chart'), max = chartMax(key);
+  cy = v => CH - PB - Math.min(v, max) / max * (CH - PT - PB);
+  $('chartMode').textContent = !series.size ? '' : analyzedMode === mode()
+    ? `· 그래프 기준: ${MODE_LABEL[analyzedMode]}` : `· 그래프는 ${MODE_LABEL[analyzedMode]} 기준입니다 (현재 ${MODE_LABEL[mode()]}). 다시 분석하세요.`;
   let grid = '';
-  for (const v of [0, 45, 90, 135, 180]) grid += `<line x1="${PL}" x2="${CW - PR}" y1="${cy(v)}" y2="${cy(v)}" stroke="#2c333d"/><text x="${PL - 6}" y="${cy(v) + 4}" fill="#9aa4b2" font-size="12" text-anchor="end">${v}°</text>`;
+  for (const v of [0, 1, 2, 3, 4].map(i => i * max / 4)) grid += `<line x1="${PL}" x2="${CW - PR}" y1="${cy(v)}" y2="${cy(v)}" stroke="#2c333d"/><text x="${PL - 6}" y="${cy(v) + 4}" fill="#9aa4b2" font-size="12" text-anchor="end">${key === 'stance_ratio' ? v.toFixed(2) : v + '°'}</text>`;
   let d = '', pen = false;
   for (const f of [...series.keys()].sort((a, b) => a - b)) {
     const v = series.get(f)[s]?.[key];
@@ -336,6 +354,7 @@ $('chart').onclick = e => {
   video.pause(); seekFrame(Math.round((x - PL) / (CW - PL - PR) * (total() - 1)));
 };
 drawChart();
+render();
 
 // ---- capture ----
 $('capture').onclick = capture;
@@ -344,10 +363,10 @@ async function capture() {
   const c = document.createElement('canvas'); c.width = overlay.width; c.height = overlay.height;
   const g = c.getContext('2d'); g.drawImage(video, 0, 0); g.drawImage(overlay, 0, 0);
   const blob = await new Promise(res => c.toBlob(res, 'image/png'));
-  const f = curFrame(), s = sel(), lm = persons[s];
-  const a = lm ? poseAngles(lm, overlay.width, overlay.height) : {};
-  captures.push({ frame: f, time_sec: Math.round(f / fps() * 1000) / 1000, person: s + 1, note: $('note').value.trim(),
-    angles: Object.fromEntries(KEYS.map(k => [k, r1(a[k])])), image: `frames/f${String(f).padStart(6, '0')}.png`, blob });
+  const f = curFrame(), s = sel(), a = angles(persons[s]);
+  const checkpoints = visibleCps().map(cp => { const r = evalCp(cp, a, f); return { id: cp.id, value: r.value == null ? null : Number(r.value.toFixed(2)), status: r.status }; });
+  captures.push({ frame: f, time_sec: Math.round(f / fps() * 1000) / 1000, person: s + 1, note: $('note').value.trim(), angle_mode: mode(),
+    angles: Object.fromEntries(KEYS.map(k => [k, roundMetric(k, a[k])])), checkpoints, image: `frames/f${String(f).padStart(6, '0')}.png`, blob });
   $('note').value = '';
   renderCaptures();
   status(`프레임 ${f} 담음`);
@@ -369,8 +388,10 @@ $('export').onclick = async () => {
   const label = ($('label').value.trim() || 'session').replace(/[\\/:*?"<>|\s]+/g, '-');
   const now = new Date(), pad = n => String(n).padStart(2, '0');
   const dir = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${label}`;
+  // angle_mode = mode of angles.csv when an analysis exists (captures carry their own angle_mode)
   const meta = { video_name: videoName, label, fps: fps(), stride: analyzedStride, width: video.videoWidth, height: video.videoHeight,
-    duration_sec: Math.round(video.duration * 1000) / 1000, frames_total: total(), created_at: now.toISOString(), mediapipe_version: MP_VERSION };
+    duration_sec: Math.round(video.duration * 1000) / 1000, frames_total: total(), created_at: now.toISOString(), mediapipe_version: MP_VERSION,
+    checkpoints_version: cps?.version ?? null, handedness: hand(), angle_mode: analyzedMode || mode() };
   const files = [
     ['meta.json', JSON.stringify(meta, null, 2)],
     ['angles.csv', anglesCsv()],
@@ -405,7 +426,7 @@ function anglesCsv() {
   for (const f of [...series.keys()].sort((a, b) => a - b)) {
     const t = (f / fps()).toFixed(3), ps = series.get(f);
     if (!ps.some(Boolean)) rows.push(`${f},${t},` + ','.repeat(KEYS.length));
-    ps.forEach((a, i) => a && rows.push(`${f},${t},${i + 1},` + KEYS.map(k => a[k] == null ? '' : a[k].toFixed(1)).join(',')));
+    ps.forEach((a, i) => a && rows.push(`${f},${t},${i + 1},` + KEYS.map(k => a[k] == null ? '' : a[k].toFixed(metricDecimals(k))).join(',')));
   }
   return rows.join('\n') + '\n';
 }
