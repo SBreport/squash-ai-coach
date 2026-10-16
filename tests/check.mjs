@@ -4,6 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { KEYS, angle, trunkLean, poseAngles, angle3, trunkLean3, poseAngles3, stanceRatio, frontSide, resolveMetric, checkpointValue, judge,
   detectEvents, medianSmooth, signalValue, fpsFromDeltas, strideFor } from '../app/angles.mjs';
 import { layoutLabels, createTracker } from '../app/pose.mjs';
+import { colorHist, histSim, personHist, assignTracks, findOverlaps, applySwaps, IDENTITY_DEFAULTS, HIST_LEN } from '../app/identity.mjs';
 import { METRICS, summarizeSession, diffSessions, withDiffs, recoveryHr } from '../app/history.mjs';
 import { COURT, T, COURT_POINTS, CAL_ORDER, CAL_REQUIRED, calGuideSvg, ghostGuideSvg, courtSvg, CORNERS, homography, applyH, invertH, calibrate, footPoint, courtPos, tOccupancy,
   cornerOf, detectExcursions, cornerAvg, slowestCorner, totalSec, handsUp, detectHandsUp } from '../app/court.mjs';
@@ -418,4 +419,106 @@ for (const m of project.metrics) for (const k of ['id', 'name', 'unit', 'better'
   for (let i = 0; i < 50; i++) g.assign([P(0.3), P(0.8)]);
   assert.equal(slot(g.assign([P(0.78)])), 1, 'game: lone detection near player 2 goes to slot 2');
 }
-console.log(`check.mjs: ok (angles 2D/3D, checkpoints, auto detect, fps, overlay labels, court homography/wizard order/T/excursions, history/diff/recovery HR, ${files.length} data files)`);
+// ---- identity: clothing colour histogram, track assignment, overlaps, swaps ----
+const ID = cpFile.identity;
+assert.ok(ID, 'checkpoints.json: identity missing');
+for (const k of ['w_pos', 'w_col', 'overlap_dist', 'ema']) assert.ok(typeof ID[k] === 'number' && ID[k] >= 0, `identity.${k}`);
+assert.ok(/AI/.test(ID.note), 'identity.note must say these are AI-set values');
+{
+  const px = (r, g, b, n = 50) => Array.from({ length: n }, () => [r, g, b, 255]).flat();
+  const red = colorHist(px(200, 30, 30)), red2 = colorHist(px(210, 40, 35)), blue = colorHist(px(30, 40, 200)), black = colorHist(px(15, 15, 15)), gray = colorHist(px(128, 128, 128));
+  assert.equal(red.length, HIST_LEN); near(red.reduce((a, b) => a + b, 0), 1);
+  near(histSim(red, red), 1);
+  assert.ok(histSim(red, red2) > 0.99, 'nearly the same red');
+  assert.ok(histSim(red, blue) < 0.05, 'red vs blue');
+  assert.ok(histSim(black, gray) < 0.05, 'black vs mid gray differ by brightness');
+  assert.ok(histSim(black, red) < 0.05);
+  const mix = colorHist([...px(200, 30, 30, 50), ...px(15, 15, 15, 50)]); // half red, half black
+  near(histSim(mix, red), 0.5); near(histSim(mix, black), 0.5);
+  assert.equal(colorHist([]), null); assert.equal(colorHist(px(1, 2, 3, 5), 4, 30), null); // too few pixels
+  assert.equal(histSim(null, red), null);
+  near(histSim(colorHist([200, 30, 30, 30, 40, 200], 3), colorHist(px(200, 30, 30, 1).slice(0, 3).concat(30, 40, 200), 3)), 1); // stride 3 (plain RGB)
+
+  // personHist: red torso + black legs on a 100x100 image; landmarks on the body
+  {
+    const W = 100, H = 100, data = new Uint8ClampedArray(W * H * 4);
+    for (let i = 0; i < W * H; i++) data.set([240, 240, 240, 255], i * 4); // light wall
+    const fill = (x0, y0, x1, y1, c) => { for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) data.set([...c, 255], (y * W + x) * 4); };
+    fill(30, 20, 70, 50, [200, 30, 30]); fill(30, 50, 70, 80, [15, 15, 15]);
+    const L = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: 1 }));
+    Object.assign(L[11], { x: 0.68, y: 0.22 }); Object.assign(L[12], { x: 0.32, y: 0.22 }); Object.assign(L[23], { x: 0.6, y: 0.5 }); Object.assign(L[24], { x: 0.4, y: 0.5 });
+    Object.assign(L[25], { x: 0.6, y: 0.78 }); Object.assign(L[26], { x: 0.4, y: 0.78 });
+    const h = personHist({ data, width: W, height: H }, L);
+    assert.ok(histSim(h, colorHist([...Array(60).fill([200, 30, 30]).flat(), ...Array(40).fill([15, 15, 15]).flat()], 3)) > 0.8, 'red torso + black legs, no wall');
+    assert.equal(personHist({ data, width: W, height: H }, L.map((q, i) => i === 23 ? { ...q, visibility: 0.1 } : q)), null, 'a torso landmark is not visible');
+    const noLegs = personHist({ data, width: W, height: H }, L.map((q, i) => i === 25 || i === 26 ? { ...q, visibility: 0.1 } : q));
+    assert.ok(noLegs && histSim(noLegs, colorHist(Array(50).fill([200, 30, 30]).flat(), 3)) > 0.9, 'legs not visible: torso only');
+    assert.equal(personHist({ data, width: W, height: H }, L.map(q => ({ ...q, x: q.x + 3 }))), null, 'off screen');
+  }
+}
+{
+  const Cs = [[0.9, 0.2, 0.2], [0.2, 0.2, 0.9], [0.2, 0.9, 0.2]].map(([r, g, b]) => colorHist(Array.from({ length: 40 }, () => [r * 255, g * 255, b * 255, 255]).flat()));
+  const [RED, BLUE, GREEN] = Cs, SAME = RED;
+  // path functions give each person's hip centre at time t; frame order of people is shuffled per frame (as in the real analysis)
+  const mk = (n, dt, a, b, histA, histB, keep = () => true) => Array.from({ length: n }, (_, i) => {
+    const t = i * dt, people = [];
+    if (a && keep('a', i)) people.push({ c: a(t), hist: histA, who: 'A' });
+    if (b && keep('b', i)) people.push({ c: b(t), hist: histB, who: 'B' });
+    if (i % 3 === 1) people.reverse();
+    return { t, people };
+  });
+  const who = (frames, r) => r.map((x, i) => x.me == null ? null : frames[i].people[x.me].who).join('');
+  const O = { w_pos: ID.w_pos, w_col: ID.w_col, overlap_dist: ID.overlap_dist, ema: ID.ema };
+  const seedA = (frames, t = 0) => ({ t, idx: frames[Math.round(t / 0.1)].people.findIndex(p => p.who === 'A') });
+  // A (red) walks right to the middle and goes back, B (blue) walks left to the middle and goes back: both stand at the same spot for 4 frames
+  const tri = (x0, x1) => t => [t < 3 ? x0 + (0.5 - x0) * t / 3 : t < 3.4 ? 0.5 : 0.5 + (x1 - 0.5) * (t - 3.4) / 3, 0.5];
+  const bounce = mk(66, 0.1, tri(0.15, 0.15), tri(0.85, 0.85), RED, BLUE);
+  assert.equal(who(bounce, assignTracks(bounce, seedA(bounce), O)), 'A'.repeat(66), 'colour keeps me through a bounce at the same spot');
+  assert.equal(who(bounce, assignTracks(bounce, seedA(bounce), { ...O, w_col: 0 })).includes('B'), true, 'position alone swaps them at the bounce (so colour is needed)');
+  // seed in the middle (after the bounce): the earlier part is assigned backwards
+  const mid = assignTracks(bounce, seedA(bounce, 5), O);
+  assert.equal(who(bounce, mid), 'A'.repeat(66), 'seed in the middle, backwards and forwards');
+  assert.deepEqual([mid[0].opp != null, mid[65].opp != null], [true, true]);
+  // same clothes: pass through each other at constant speed -> position + velocity keeps each one on its own line
+  const cross = mk(40, 0.1, t => [0.1 + 0.2 * t, 0.5], t => [0.9 - 0.2 * t, 0.52], SAME, SAME);
+  assert.equal(who(cross, assignTracks(cross, seedA(cross), O)), 'A'.repeat(40), 'same colour: straight crossing keeps identity by motion');
+  // frames with only one person: me alone, opponent alone (opponent established), nobody
+  const lone = mk(60, 0.1, t => [0.2 + 0.001 * t, 0.5], t => [0.8 - 0.001 * t, 0.5], RED, BLUE, (k, i) => !(k === 'a' && i >= 20 && i < 30) && !(k === 'b' && i >= 40 && i < 50) && !(i >= 55));
+  const lr = assignTracks(lone, seedA(lone), O);
+  assert.equal(who(lone, lr).slice(0, 20), 'A'.repeat(20));
+  assert.equal(lr[25].me, null, 'only the opponent visible: I am not found'); assert.equal(lone[25].people[lr[25].opp].who, 'B');
+  assert.equal(lone[45].people[lr[45].me].who, 'A'); assert.equal(lr[45].opp, null);
+  assert.deepEqual([lr[57].me, lr[57].opp], [null, null]);
+  assert.ok(lr.every(r => r.conf >= 0 && r.conf <= 1));
+  // a one-person video with false second detections: the lone player is never given to the unestablished "opponent"
+  const ghost = mk(60, 0.1, t => [0.3 + 0.004 * t, 0.5], t => [0.3 + 0.004 * t + 0.01, 0.5], RED, GREEN, (k, i) => k === 'a' || i === 10 || i === 11);
+  const gr = assignTracks(ghost, { t: 0, idx: 0 }, O);
+  assert.equal(who(ghost, gr), 'A'.repeat(60));
+  assert.deepEqual(assignTracks([], { t: 0, idx: 0 }, O), []);
+  // overlaps: people closer than overlap_dist, and 2 -> 1 -> 2 people
+  const ov = findOverlaps(bounce, assignTracks(bounce, seedA(bounce), O), O);
+  assert.equal(ov.length, 1, JSON.stringify(ov));
+  assert.ok(ov[0].start_t <= 3.0 + 1e-9 && ov[0].end_t >= 3.4 - 1e-9 && ov[0].end_t - ov[0].start_t < 1.5, JSON.stringify(ov));
+  const dip = mk(60, 0.1, t => [0.2, 0.5], t => [0.8, 0.5], RED, BLUE, (k, i) => !(k === 'b' && i >= 20 && i < 25));
+  const ovd = findOverlaps(dip, assignTracks(dip, seedA(dip), O), O);
+  assert.equal(ovd.length, 1); assert.ok(Math.abs(ovd[0].start_t - 2.0) < 1e-9 && Math.abs(ovd[0].end_t - 2.4) < 1e-9, JSON.stringify(ovd));
+  const dip2 = mk(100, 0.1, t => [0.2, 0.5], t => [0.8, 0.5], RED, BLUE, (k, i) => !(k === 'b' && i >= 20 && i < 70)); // 5 s absence: someone left, not an overlap
+  assert.equal(findOverlaps(dip2, assignTracks(dip2, seedA(dip2), O), O).length, 0);
+  assert.deepEqual(findOverlaps(ghost, gr, O), [], 'one-person video: no overlaps');
+  assert.deepEqual(findOverlaps([], [], O), []);
+  const two = findOverlaps(mk(80, 0.1, t => [0.2, 0.5], t => [0.8, 0.5], RED, BLUE, (k, i) => !(k === 'b' && ((i >= 10 && i < 12) || (i >= 14 && i < 16)))), Array(80).fill({ me: 0, opp: 1, conf: 1 }), O);
+  assert.equal(two.length, 1, 'overlaps closer than 1 s are merged');
+  // swaps: from an overlap's end to the next overlap's start; inside overlaps and after the next one nothing changes
+  const fr = Array.from({ length: 100 }, (_, i) => ({ t: i * 0.1, people: [{}, {}] })), base = fr.map(() => ({ me: 0, opp: 1, conf: 1 }));
+  const ovs = [{ start_t: 2, end_t: 3 }, { start_t: 6, end_t: 7 }];
+  const sw = applySwaps(fr, base, ovs, [3]);
+  assert.deepEqual([sw[29].me, sw[30].me, sw[31].me, sw[59].me, sw[60].me, sw[75].me], [0, 0, 1, 1, 0, 0]);
+  assert.equal(sw[31].opp, 0);
+  assert.equal(base[31].me, 0, 'input is not changed');
+  const both = applySwaps(fr, base, ovs, [3, 7]);
+  assert.deepEqual([both[40].me, both[80].me], [1, 1]);
+  assert.deepEqual(applySwaps(fr, base, ovs, []).map(r => r.me), base.map(r => r.me));
+  assert.equal(IDENTITY_DEFAULTS.overlap_dist, 0.08);
+}
+
+console.log(`check.mjs: ok (angles 2D/3D, checkpoints, auto detect, fps, overlay labels, court homography/wizard order/T/excursions, history/diff/recovery HR, identity colour/assign/overlaps/swaps, ${files.length} data files)`);
