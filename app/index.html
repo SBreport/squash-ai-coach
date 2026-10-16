@@ -3,168 +3,293 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>스쿼시 자세 분석</title>
+<title>스쿼시 AI 코치</title>
 <style>
-  :root { --bg:#111418; --panel:#1b2027; --line:#2c333d; --text:#e8ecf1; --dim:#9aa4b2; --p1:#00d8ff; --p2:#ff9f1c; --accent:#ffd400; }
+  /* Three text roles only: numbers (.n, bold), body (14px), sub (.sub, 12px gray). Yellow = one accent per screen. */
+  :root { --bg:#111418; --panel:#1b2027; --line:#2c333d; --text:#e8ecf1; --dim:#9aa4b2; --accent:#ffd400; --good:#5fd38d; --bad:#ff6b6b; --p1:#00d8ff; --p2:#ff9f1c; }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 "Malgun Gothic", "Segoe UI", sans-serif; }
-  header { display:flex; gap:12px; align-items:center; flex-wrap:wrap; padding:10px 16px; border-bottom:1px solid var(--line); }
-  header h1 { font-size:18px; margin:0 12px 0 0; }
-  #status { color:var(--dim); }
-  main { display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:16px; padding:16px; }
-  @media (max-width: 900px) { main { grid-template-columns:1fr; } }
-  #drop { min-height:200px; display:flex; align-items:center; justify-content:center; border:2px dashed var(--line); border-radius:8px; background:#000; }
-  #drop.over { border-color:var(--accent); }
-  #stage { position:relative; display:inline-block; line-height:0; }
-  #stage video { display:block; max-width:100%; max-height:72vh; }
-  #stage canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
-  #hint { color:var(--dim); padding:40px; text-align:center; line-height:1.6; }
-  #err { display:none; margin:12px 0; padding:12px 16px; background:#3a1d1d; border:1px solid #a33; border-radius:6px; }
-  #err pre { background:#000; padding:8px; user-select:all; white-space:pre-wrap; }
-  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px; }
-  #info { font:600 18px/1.4 Consolas, monospace; margin-top:10px; }
-  button, select, input { font:inherit; color:var(--text); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px 10px; }
-  button { cursor:pointer; }
-  button:hover { border-color:var(--dim); }
-  button:disabled { opacity:.4; cursor:default; }
-  input[type=number] { width:72px; }
-  progress { width:200px; }
-  aside section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:12px; }
-  aside h2 { font-size:14px; color:var(--dim); margin:0 0 8px; font-weight:600; }
-  #angles { width:100%; border-collapse:collapse; font-size:20px; }
-  #angles td { padding:3px 0; }
-  #angles td:last-child { text-align:right; font:700 22px Consolas, monospace; }
-  .p1 { color:var(--p1); } .p2 { color:var(--p2); }
-  #note, #label { width:100%; }
-  #caps { list-style:none; padding:0; margin:8px 0 0; max-height:260px; overflow:auto; }
-  #caps li { display:flex; gap:8px; align-items:center; font-size:13px; margin-bottom:6px; }
-  #caps img { width:96px; border-radius:4px; }
-  #chartBox { margin-top:12px; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px; }
-  #chart { width:100%; display:block; cursor:crosshair; }
-  .dim { color:var(--dim); font-size:13px; }
-  kbd { border:1px solid var(--line); border-radius:4px; padding:0 5px; font-size:12px; }
-  a { color:var(--accent); }
-  .chip { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:0 10px; font-size:13px; }
-  #modeTag { color:var(--accent); border-color:var(--accent); font-weight:700; }
-  .cp { border-top:1px solid var(--line); padding:8px 0; font-size:13px; }
-  .cp b { font-size:14px; }
-  .cp .st { float:right; }
-  .st.pass { color:#5fd38d; border-color:#5fd38d; } .st.fail { color:#ff6b6b; border-color:#ff6b6b; }
-  .cp button { padding:2px 8px; font-size:12px; }
-  .cp button.on { border-color:var(--accent); color:var(--accent); }
-  .cp .src { font-size:11px; color:var(--dim); }
-  #fpsAuto { color:#5fd38d; border-color:#5fd38d; }
-  #fpsAuto.warn { color:#ff6b6b; border-color:#ff6b6b; }
-  #evList { list-style:none; padding:0; margin:8px 0 0; }
-  #evList button { width:100%; text-align:left; margin-bottom:4px; }
-  #evSum { font-size:13px; margin:8px 0 0; padding-left:18px; }
-  #stage.cal { cursor:crosshair; }
-  #courtBox { margin-top:12px; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px; }
-  #courtGrid { display:grid; grid-template-columns:280px minmax(0,1fr); gap:14px; margin-top:8px; }
-  @media (max-width: 700px) { #courtGrid { grid-template-columns:1fr; } }
-  #map { width:100%; display:block; background:#f4efe4; border-radius:4px; cursor:pointer; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 "Malgun Gothic", "Apple SD Gothic Neo", "Segoe UI", sans-serif; display:flex; flex-direction:column; overflow:hidden; }
   [hidden] { display:none !important; }
-  #ghost table { width:100%; max-width:460px; border-collapse:collapse; font-size:12px; margin:6px 0 10px; }
-  #ghost th { color:var(--dim); font-weight:600; text-align:right; }
-  #ghost td { text-align:right; padding:2px 3px; border-top:1px solid var(--line); font-family:Consolas, monospace; }
-  #ghost .l { text-align:left; font-family:inherit; }
-  #ghost tr[data-f] { cursor:pointer; } #ghost tr[data-f]:hover { background:#232a33; }
-  #ghost tr.slow td { color:var(--accent); font-weight:700; }
-  #ghost .warn { color:#ff9f1c; font-weight:600; }
-  #calInfo { margin-top:8px; font-size:13px; }
+  a { color:var(--text); }
+  .sub { color:var(--dim); font-size:12px; font-weight:400; }
+  .n { font-weight:700; font-variant-numeric:tabular-nums; }
+  .big { font-size:26px; line-height:1.15; }
+  .good { color:var(--good); } .bad { color:var(--bad); } .none { color:var(--dim); }
+  .grow { flex:1; }
+  button, select, input { font:inherit; color:var(--text); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:5px 10px; }
+  button { cursor:pointer; }
+  button:hover:not(:disabled), .btn:hover { border-color:var(--dim); }
+  button:disabled { opacity:.4; cursor:default; }
+  button.primary { background:#2a3340; border-color:#46556a; font-weight:700; }
+  input[type=number] { width:76px; }
+  input[type=checkbox], input[type=radio] { width:auto; }
+  .btn { display:inline-block; cursor:pointer; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:5px 10px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+  .chip { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:0 10px; font-size:12px; color:var(--dim); white-space:nowrap; }
+  kbd { border:1px solid var(--line); border-radius:4px; padding:0 5px; font-size:12px; }
+
+  /* header */
+  header { flex:none; height:48px; display:flex; align-items:center; gap:12px; padding:0 16px; border-bottom:1px solid var(--line); position:relative; z-index:30; }
+  header h1 { font-size:16px; margin:0 6px 0 0; white-space:nowrap; }
+  #tabs { display:flex; gap:2px; }
+  #tabs button { border:0; border-bottom:2px solid transparent; border-radius:0; background:none; padding:12px 12px 10px; color:var(--dim); font-weight:700; }
+  #tabs button:hover { color:var(--text); }
+  #tabs button.on { color:var(--accent); border-bottom-color:var(--accent); }
+  #status { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  details.pop { position:relative; }
+  details.pop > summary { cursor:pointer; list-style:none; border:1px solid var(--line); border-radius:6px; padding:5px 10px; background:var(--panel); white-space:nowrap; }
+  details.pop > summary::-webkit-details-marker { display:none; }
+  .popbox { position:absolute; right:0; top:calc(100% + 6px); width:300px; background:var(--panel); border:1px solid #46556a; border-radius:8px; padding:12px 14px; box-shadow:0 8px 24px rgba(0,0,0,.5); display:flex; flex-direction:column; gap:8px; }
+  .popbox label { display:flex; gap:8px; align-items:center; justify-content:space-between; }
+  .popbox label.chk { justify-content:flex-start; }
+  .popbox input#label { width:160px; }
+
+  /* live view */
+  main#live { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,64fr) minmax(0,36fr); gap:12px; padding:10px 16px 12px; }
+  #left { display:flex; flex-direction:column; gap:8px; min-height:0; min-width:0; }
+  #stage { position:relative; flex:none; height:45vh; min-height:220px; display:flex; align-items:center; justify-content:center; background:#000; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  #stage.empty { border:2px dashed var(--line); }
+  #stage.over { border-color:var(--dim); }
+  #stage.cal { cursor:crosshair; }
+  #stage:fullscreen { height:100vh; border:0; border-radius:0; }
+  #vbox { position:relative; line-height:0; }
+  #vbox video { width:100%; height:100%; display:block; }
+  #vbox canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  #hint { color:var(--dim); padding:24px; text-align:center; line-height:1.7; cursor:pointer; }
+  #fsBtn { position:absolute; top:8px; right:8px; z-index:2; background:rgba(0,0,0,.6); padding:3px 10px; font-size:12px; }
+  #fsInfo { display:none; position:absolute; left:10px; bottom:8px; background:rgba(0,0,0,.6); border-radius:4px; padding:2px 8px; font-size:14px; line-height:1.4; }
+  #stage:fullscreen #fsInfo { display:block; }
+  #err { display:none; padding:10px 14px; background:#3a1d1d; border:1px solid #a33; border-radius:6px; }
+  #err pre { background:#000; padding:8px; user-select:all; white-space:pre-wrap; margin:6px 0 0; }
+  #fpsBanner { display:flex; gap:16px; align-items:center; justify-content:space-between; padding:10px 14px; background:#3a1d1d; border:1px solid #a33; border-radius:8px; }
+  #fpsBanner b { font-size:16px; }
+  .qfps { display:flex; gap:8px; } .qfps button { min-width:64px; font-weight:700; }
+  .ctl { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .ctl #info { margin:0 6px; white-space:nowrap; }
+  #prog { width:120px; }
+  #gwrap { position:relative; flex:1; min-height:0; }
+  .g { position:absolute; inset:0; flex-direction:column; gap:6px; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+  .gh { flex:none; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .gh b { font-size:14px; }
+  .gfill { position:relative; flex:1; min-height:0; }
+  .gfill > svg { position:absolute; inset:0; width:100%; height:100%; }
+  #chart { cursor:crosshair; }
+  .mapRow { position:absolute; inset:0; display:flex; gap:20px; align-items:stretch; }
+  .mapRow svg { height:100%; width:auto; aspect-ratio:7.2 / 10.55; background:#f4efe4; border-radius:4px; cursor:pointer; }
+  .mapRow .legend { align-self:center; max-width:360px; display:flex; flex-direction:column; gap:6px; }
+
+  /* panel */
+  #panel { min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:10px; padding-right:2px; }
+  #panel > * { flex:none; }
+  [data-tabs] { display:none; }
+  body[data-tab=pose] [data-tabs~=pose], body[data-tab=game] [data-tabs~=game], body[data-tab=steps] [data-tabs~=steps] { display:block; }
+  body[data-tab=pose] .g[data-tabs~=pose], body[data-tab=game] .g[data-tabs~=game], body[data-tab=steps] .g[data-tabs~=steps] { display:flex; }
+  .card, details.acc { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .card h2 { font-size:14px; font-weight:700; margin:0 0 8px; }
+  details.acc > summary { cursor:pointer; font-weight:700; }
+  details.acc[open] > summary { margin-bottom:8px; }
+  details.mini > summary { cursor:pointer; margin-top:6px; }
+  #reco { background:#1f2b3a; border:1px solid #46556a; border-radius:8px; padding:8px 12px; display:flex; gap:10px; align-items:center; justify-content:space-between; }
+  .stats { display:flex; gap:10px; }
+  .stat { flex:1; min-width:0; }
+  .stat.hl .big { color:var(--accent); }
+  #sum .note { margin-top:6px; }
+
+  .cp { border-top:1px solid var(--line); padding:8px 0; }
+  .cp:first-child { border-top:0; padding-top:0; }
+  .cp-h { display:flex; align-items:center; gap:8px; }
+  .cp-h b { flex:1; min-width:0; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--dim); flex:none; }
+  .dot.pass { background:var(--good); } .dot.fail { background:var(--bad); }
+  .stt { font-size:12px; color:var(--dim); } .stt.pass { color:var(--good); } .stt.fail { color:var(--bad); }
+  .rng { margin:6px 0 2px; }
+  .mkw { position:relative; height:18px; }
+  .mk { position:absolute; bottom:0; transform:translateX(-50%); font-weight:700; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .mk.pass { color:var(--good); } .mk.fail { color:var(--bad); }
+  .trk { position:relative; height:8px; background:#2a313b; border-radius:4px; }
+  .tg { position:absolute; top:0; bottom:0; background:rgba(95,211,141,.35); border-radius:4px; }
+  .pin { position:absolute; top:-3px; width:4px; height:14px; margin-left:-2px; border-radius:2px; background:var(--text); }
+  .pin.pass { background:var(--good); } .pin.fail { background:var(--bad); }
+  .val { margin-top:4px; }
+  .ft { margin-top:4px; }
+  .lnk { background:none; border:0; padding:0; color:var(--dim); text-decoration:underline; cursor:pointer; font-size:12px; }
+  .srcbox { margin-top:6px; padding:6px 8px; background:#151a20; border-radius:6px; font-size:12px; }
+  .srcbox a { color:var(--text); }
+  .vbtn { display:flex; gap:6px; margin-top:6px; }
+  .vbtn button { padding:2px 10px; font-size:12px; }
+  .vbtn button.on { border-color:var(--text); font-weight:700; }
+  #evList { list-style:none; padding:0; margin:6px 0 0; max-height:250px; overflow-y:auto; }
+  #evList button { width:100%; display:flex; gap:10px; align-items:center; text-align:left; margin-bottom:4px; padding:4px 6px; }
+  #evList img { width:72px; height:40px; object-fit:cover; border-radius:4px; background:#000; flex:none; }
+  .evt { display:flex; flex-direction:column; min-width:0; }
+  #angBasic { display:flex; gap:10px; }
+  #angBasic > div { flex:1; display:flex; flex-direction:column; }
+  #angBasic .n, #angMore .n { font-size:18px; }
+  #angMore { display:grid; grid-template-columns:1fr 1fr; gap:6px 14px; }
+  #angMore > div { display:flex; justify-content:space-between; }
+  #caps { list-style:none; padding:0; margin:8px 0 0; max-height:180px; overflow:auto; }
+  #caps li { display:flex; gap:8px; align-items:center; margin-bottom:6px; font-size:12px; }
+  #caps img { width:96px; border-radius:4px; }
+  #note { width:100%; }
+  table.t { width:100%; border-collapse:collapse; font-size:12px; }
+  table.t th { color:var(--dim); font-weight:400; text-align:right; padding:2px 4px; }
+  table.t td { text-align:right; padding:3px 4px; border-top:1px solid var(--line); font-variant-numeric:tabular-nums; }
+  table.t .l { text-align:left; }
+  table.t tr[data-f] { cursor:pointer; } table.t tr[data-f]:hover { background:#232a33; }
+  #visits { max-height:210px; overflow-y:auto; }
+  #map2 { height:200px; width:auto; aspect-ratio:7.2 / 10.55; background:#f4efe4; border-radius:4px; cursor:pointer; flex:none; }
+  .mrow { display:flex; gap:14px; align-items:flex-start; }
+
+  /* history view */
+  #histView { flex:1; min-height:0; display:none; flex-direction:column; gap:10px; padding:10px 16px 12px; }
+  body[data-tab=hist] #histView { display:flex; }
+  body[data-tab=hist] main#live { display:none; }
+  .hbar { flex:none; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .hgrid { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,56fr) minmax(0,44fr); gap:12px; }
+  .hgrid > .card { min-height:0; overflow:auto; }
+  table.ht { width:100%; border-collapse:collapse; }
+  table.ht th { position:sticky; top:0; background:var(--panel); color:var(--dim); font-size:12px; font-weight:400; text-align:right; padding:4px 6px; border-bottom:1px solid var(--line); }
+  table.ht td { text-align:right; padding:6px; border-top:1px solid var(--line); vertical-align:top; }
+  table.ht th:first-child, table.ht td:first-child { text-align:left; }
+  .trends { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .trend svg { width:100%; aspect-ratio:300 / 110; display:block; background:#151a20; border-radius:6px; }
+  .trend .th { display:flex; justify-content:space-between; align-items:baseline; }
+
+  @media (max-width: 1099px) {
+    body { overflow:auto; height:auto; }
+    html { height:auto; }
+    header { height:auto; flex-wrap:wrap; padding:8px 16px; }
+    main#live { grid-template-columns:1fr; }
+    #gwrap { flex:none; height:300px; }
+    #panel { overflow:visible; }
+    .hgrid { grid-template-columns:1fr; }
+    .trends { grid-template-columns:1fr; }
+  }
 </style>
 </head>
-<body>
+<body data-tab="pose">
 <header>
-  <h1>스쿼시 자세 분석</h1>
-  <input type="file" id="file" accept="video/*">
-  <label>라켓 손 <select id="hand"><option value="R">오른손</option><option value="L">왼손</option></select></label>
-  <label>각도 <select id="mode"><option value="2d">2D 화면</option><option value="3d">3D 추정</option></select></label>
+  <h1>스쿼시 AI 코치</h1>
+  <nav id="tabs">
+    <button data-tab="pose">자세 조정</button><button data-tab="game">게임 분석</button><button data-tab="steps">스텝·체력</button><button data-tab="hist">변화 기록</button>
+  </nav>
+  <span id="status" class="sub">모델 불러오는 중...</span>
   <span id="modeTag" class="chip"></span>
+  <label class="btn" for="file">파일 열기</label><input type="file" id="file" accept="video/*" hidden>
+  <details class="pop" id="advPop"><summary>고급 설정</summary>
+    <div class="popbox">
+      <label>fps (초당 프레임) <input type="number" id="fps" value="60" min="1" max="1000"></label>
+      <label>분석 간격 <span><input type="number" id="stride" value="2" min="1" max="100"> 프레임마다</span></label>
+      <label>각도 <select id="mode"><option value="2d">2D 화면</option><option value="3d">3D 추정</option></select></label>
+      <label>라켓 손 <select id="hand"><option value="R">오른손</option><option value="L">왼손</option></select></label>
+      <label>뼈대 표시 <select id="skel"><option value="all">모든 사람</option><option value="sel">선택한 사람만</option></select></label>
+      <label class="chk"><input type="checkbox" id="showCp" checked> 영상 위에 이번 주 체크 표시</label>
+      <label>묶음 이름 <input id="label" placeholder="예: solo-drive" maxlength="60"></label>
+      <div class="sub">저장 위치: <b id="dirName">정하지 않음</b> · <a href="#" id="dirChange">저장 위치 바꾸기</a></div>
+    </div>
+  </details>
+  <details class="pop"><summary>단축키</summary>
+    <div class="popbox"><div><kbd>Space</kbd> 재생 / 정지</div><div><kbd>←</kbd> <kbd>→</kbd> 1프레임 이동</div><div><kbd>Shift</kbd> + 화살표 10프레임 이동</div><div><kbd>C</kbd> 이 장면 담기</div><div><kbd>F</kbd> 전체화면 켜기 / 끄기 (<kbd>Esc</kbd>로 돌아오기)</div></div>
+  </details>
   <a href="compare.html">영상 비교 화면</a>
-  <span id="status">모델 불러오는 중...</span>
 </header>
-<main>
-  <div>
-    <div id="drop"><div id="hint">영상 파일을 여기로 끌어다 놓거나 위에서 선택하세요.<br>
-      <kbd>Space</kbd> 재생/정지 · <kbd>←</kbd><kbd>→</kbd> 1프레임 · <kbd>Shift</kbd>+화살표 10프레임 · <kbd>C</kbd> 이 프레임 담기</div>
-      <div id="stage" hidden><video id="video" playsinline muted></video><canvas id="overlay"></canvas></div>
+
+<main id="live">
+  <div id="left">
+    <div id="stage" class="empty">
+      <div id="hint">영상 파일을 여기로 끌어다 놓거나, 위의 [파일 열기]를 누르세요.<br>열면 앱이 fps를 알아서 재고 자세 뼈대를 그려 줍니다.</div>
+      <div id="vbox" hidden><video id="video" playsinline muted></video><canvas id="overlay"></canvas></div>
+      <div id="fsInfo"></div>
+      <button id="fsBtn" hidden>전체화면</button>
     </div>
     <div id="err"></div>
-    <div id="info">프레임 - / - · - fps · 00:00.000</div>
-    <div class="row">
-      <button id="play">재생/정지</button>
-      <button data-step="-10">-10</button><button data-step="-1">-1</button>
-      <button data-step="1">+1</button><button data-step="10">+10</button>
-      <label>fps <input type="number" id="fps" value="60" min="1" max="1000"></label> <span id="fpsAuto" class="chip" hidden></span>
-      <label>간격 <input type="number" id="stride" value="2" min="1" max="100"> 프레임마다</label>
-      <button id="analyze">전체 분석</button>
-      <label><input type="checkbox" id="showCp" checked> 영상에 표시</label>
-      <progress id="prog" value="0" max="1" hidden></progress>
-      <button id="cancel" hidden>취소</button>
+    <div id="fpsBanner" hidden>
+      <div><b>영상의 fps를 확인해 주세요.</b><div class="sub">아이폰 슬로모션은 보통 120, 일반은 30 또는 60입니다. 고르기 전에는 전체 분석을 할 수 없습니다.</div></div>
+      <div class="qfps"><button data-fps="30">30</button><button data-fps="60">60</button><button data-fps="120">120</button><button data-fps="240">240</button></div>
     </div>
-    <div id="chartBox">
-      <div class="row" style="margin-top:0">
-        <label>그래프 <select id="chartKey"></select></label>
-        <span class="dim">선택한 사람 기준 · 그래프를 누르면 그 프레임으로 이동</span> <span id="chartMode" class="dim"></span>
-      </div>
-      <svg id="chart" viewBox="0 0 1000 220"></svg>
+    <div class="ctl">
+      <button id="play">재생</button>
+      <button data-step="-10">-10</button><button data-step="-1">-1</button><button data-step="1">+1</button><button data-step="10">+10</button>
+      <span id="info" class="n">프레임 - / -</span><span id="fpsAuto" class="chip" hidden></span>
+      <span class="grow"></span>
+      <progress id="prog" value="0" max="1" hidden></progress><button id="cancel" hidden>취소</button>
+      <button id="capture">장면 담기</button>
+      <button id="analyze" class="primary">전체 분석</button>
+      <button id="export">내보내기</button>
     </div>
-    <div id="courtBox">
-      <div class="row" style="margin-top:0"><b>코트 이동 지도</b> <span id="tOcc" class="chip" hidden></span>
-        <span class="dim">선택한 사람 기준 · 점을 누르면 그 시간으로 이동</span></div>
-      <div id="courtMsg" class="dim"></div>
-      <div id="courtGrid"><svg id="map" viewBox="-0.4 -0.4 7.2 10.55"></svg><div id="ghost"></div></div>
+    <div id="gwrap">
+      <section class="g" data-tabs="pose">
+        <div class="gh"><b>무릎 각도 그래프</b>
+          <label class="sub">보기 <select id="chartKey"></select></label>
+          <span class="sub">그래프를 누르면 그 장면으로 이동 · 노란 점 = 무릎이 크게 굽은 순간</span> <span id="chartMode" class="sub"></span></div>
+        <div class="gfill"><svg id="chart" viewBox="0 0 1000 220"></svg></div>
+      </section>
+      <section class="g" data-tabs="game">
+        <div class="gh"><b>코트 이동 지도</b><span class="sub">선택한 사람 기준 · 점을 누르면 그 시간으로 이동</span></div>
+        <div class="gfill"><div class="mapRow"><svg id="map" viewBox="-0.4 -0.4 7.2 10.55"></svg>
+          <div class="legend"><div id="mapMsg" class="sub"></div>
+            <div class="sub">점 색: 연한 파랑 = 영상 앞부분, 진한 파랑 = 뒷부분<br>주황 원 = 코너를 찍고 가장 멀리 간 곳 (번호는 방문 순서)<br>큰 노란 점 = 지금 화면의 선수 위치</div></div></div></div>
+      </section>
+      <section class="g" data-tabs="steps">
+        <div class="gh"><b>코너별 평균 소요 시간</b><span class="sub">T에서 나가 코너를 찍고 돌아오기까지 · 노란 막대 = 가장 느린 코너</span></div>
+        <div class="gfill"><svg id="bars" viewBox="0 0 1000 220"></svg></div>
+      </section>
     </div>
   </div>
-  <aside>
-    <section>
-      <h2>사람 선택</h2>
-      <label class="p1"><input type="radio" name="person" value="0" checked> 1번 (하늘색)</label>&nbsp;
-      <label class="p2"><input type="radio" name="person" value="1"> 2번 (주황)</label>
-    </section>
-    <section>
-      <h2>현재 프레임 각도</h2>
-      <table id="angles"></table>
-    </section>
-    <section>
+
+  <aside id="panel">
+    <div id="reco" hidden></div>
+    <section class="card" id="sum"></section>
+
+    <section class="card" data-tabs="pose"><h2>이번 주 체크</h2><div id="weekList"></div></section>
+    <section class="card" data-tabs="pose"><h2>무릎이 크게 굽은 순간</h2><div id="evHead" class="sub"></div><ul id="evList"></ul></section>
+    <section class="card" data-tabs="pose"><h2>다른 체크</h2><div id="otherList"></div></section>
+
+    <section class="card" id="calSec" data-tabs="game steps">
       <h2>코트 맞추기</h2>
-      <p class="dim" style="margin:0 0 6px">영상의 바닥 표시를 4군데 이상 눌러 코트 위치를 알려주면 T 점유율, 이동 지도, 고스팅 시간이 나옵니다.
-        뒷벽 쪽에서 찍은 영상이면 앞벽 모서리, 숏라인, T, 서비스박스가 보입니다. 선수가 가리면 프레임을 옮겨서 찍으세요.</p>
-      <div class="row" style="margin-top:0">
-        <button id="calStart">코트 맞추기</button><button id="calUndo" disabled>되돌리기</button><button id="calReset" disabled>초기화</button>
-      </div>
-      <div id="calPickBox" class="row" hidden><label>지금 찍을 점 <select id="calPick" style="max-width:100%"></select></label>
-        <span class="dim">고른 뒤 영상에서 그 위치를 누르세요.</span></div>
-      <div id="calInfo" class="dim"></div>
-      <label><input type="checkbox" id="showCourt" checked> 코트 라인 표시</label>
+      <div id="calSteps" style="margin-bottom:8px"></div>
+      <div class="row" style="margin-top:0"><button id="calStart">코트 맞추기</button><button id="calUndo" disabled>되돌리기</button><button id="calReset" disabled>초기화</button></div>
+      <div id="calPickBox" class="row" hidden><label>지금 찍을 점 <select id="calPick" style="max-width:100%"></select></label></div>
+      <div id="calInfo" class="sub" style="margin-top:6px"></div>
+      <label class="sub"><input type="checkbox" id="showCourt" checked> 영상에 코트 선 표시</label>
+      <details class="mini"><summary class="sub">어떤 점을 찍나요?</summary>
+        <p class="sub" style="margin:4px 0 0">뒷벽 쪽에서 찍은 영상이면 앞벽 바닥 모서리, 숏라인(앞벽 쪽 가로선)과 옆벽이 만나는 곳, T(숏라인과 가운데 세로선이 만나는 곳), 서비스박스 뒤쪽 안 모서리가 보입니다. 선수가 가리면 프레임을 옮겨서 찍고, 안 보이는 점은 건너뛰세요. 점이 많고 퍼져 있을수록 정확합니다.</p></details>
     </section>
-    <section>
-      <h2>체크포인트</h2>
-      <label>그룹 <select id="cpGroup"></select></label>
-      <div id="cpList" class="dim">불러오는 중...</div>
-    </section>
-    <section>
-      <h2>무릎 굽힘 순간 자동 감지</h2>
-      <div id="evBox" class="dim">전체 분석이 끝나면 자동으로 찾아서 담습니다.</div>
-      <ul id="evList"></ul>
-      <ul id="evSum"></ul>
-      <p id="evNote" class="dim" style="font-size:11px" hidden>선택한 그룹 기준 — 런지 항목은 런지 드릴 영상에서만 의미</p>
-    </section>
-    <section>
-      <h2>이 프레임 담기 (C)</h2>
-      <input id="note" placeholder="한 줄 메모 (선택)" maxlength="200">
-      <div class="row"><button id="capture">이 프레임 담기</button><span id="capCount" class="dim">0장</span></div>
-      <ul id="caps"></ul>
-    </section>
-    <section>
-      <h2>분석 묶음 내보내기</h2>
-      <input id="label" placeholder="라벨 (예: solo-drive)" maxlength="60">
-      <div class="row"><button id="export">분석 묶음 내보내기</button></div>
-      <p class="dim">저장 위치로 저장소의 sessions 폴더를 고르세요. 날짜-라벨 폴더가 만들어집니다.</p>
-    </section>
+    <section class="card" data-tabs="game"><h2>분석할 사람</h2>
+      <label><input type="radio" name="person" value="0" checked> 1번 (하늘색)</label>&nbsp;&nbsp;<label><input type="radio" name="person" value="1"> 2번 (주황)</label>
+      <div class="sub" style="margin-top:4px">내 모습이 아닌 쪽이 선택돼 있으면 바꾸세요. T 점유율은 선택한 사람 기준입니다.</div></section>
+    <section class="card" data-tabs="game"><h2>범실 기록</h2><div class="sub">2주차 추가 예정</div></section>
+
+    <section class="card" data-tabs="steps"><h2>이동 지도</h2>
+      <div class="mrow"><svg id="map2" viewBox="-0.4 -0.4 7.2 10.55"></svg><div class="sub">점을 누르면 그 시간으로 이동합니다.<br>주황 원 = 코너 방문(번호 순).</div></div></section>
+    <section class="card" data-tabs="steps"><h2>방문 기록</h2><div id="visits" class="sub">코트를 맞추고 전체 분석을 하면 나옵니다.</div></section>
+    <section class="card" data-tabs="steps"><h2>회복 심박</h2>
+      <div class="row" style="margin-top:0"><label>A 끝난 직후 <input type="number" id="hrA" min="30" max="250"></label><label>B 1분 뒤 <input type="number" id="hrB" min="30" max="250"></label></div>
+      <div id="hrOut" class="sub" style="margin-top:6px"></div></section>
+
+    <section class="card" data-tabs="pose game"><h2>지금 프레임 각도</h2>
+      <div id="angBasic"></div>
+      <details class="mini"><summary class="sub">상세 각도</summary><div id="angMore" style="margin-top:6px"></div></details></section>
+    <details class="acc" id="visSec" data-tabs="pose game"><summary>눈으로 확인</summary><div id="visList"></div></details>
+    <details class="acc" data-tabs="pose game"><summary>근거</summary><div id="srcList"></div></details>
+    <details class="acc" data-tabs="pose game"><summary>담은 장면 <span id="capCount" class="sub">0장</span></summary>
+      <input id="note" placeholder="한 줄 메모 (선택, 장면 담기에 붙음)" maxlength="200"><ul id="caps"></ul></details>
   </aside>
 </main>
+
+<div id="histView">
+  <div class="hbar">
+    <button id="histConnect" class="primary">sessions 폴더 연결</button>
+    <label class="btn" id="histPickWrap" for="histFiles" hidden>폴더 여러 파일 선택</label><input type="file" id="histFiles" webkitdirectory multiple hidden>
+    <a href="#" id="histChange" class="sub">저장 위치 바꾸기</a>
+    <span id="histMsg" class="sub"></span>
+  </div>
+  <div class="hgrid">
+    <div class="card" id="histTable"></div>
+    <div class="card"><h2>지표별 변화</h2><div id="histCharts" class="trends"></div></div>
+  </div>
+</div>
 
 <script type="module">
 import { KEYS, LABELS, checkpointValue, judge, resolveMetric, metricUnit, fmtMetric, roundMetric, metricDecimals,
@@ -173,35 +298,68 @@ import { COURT, T, COURT_POINTS, COURT_LINES, CORNERS, CORNER_LABEL, calibrate, 
   detectExcursions, cornerAvg, slowestCorner, totalSec, drawCourtLines, drawCalPoints } from './court.mjs';
 import { MP_VERSION, COLORS, MODE_LABEL, loadPose, toPeople, personAngles, createTracker,
   drawSkeleton, drawKnees, drawBadge, drawCheckpoints, loadSetting, saveSetting } from './pose.mjs';
+import { METRICS, summarizeSession, withDiffs, fmtValue, recoveryHr } from './history.mjs';
 
 const $ = id => document.getElementById(id);
-const video = $('video'), overlay = $('overlay'), ctx = overlay.getContext('2d');
+const video = $('video'), overlay = $('overlay'), ctx = overlay.getContext('2d'), stage = $('stage'), vbox = $('vbox');
 
 let landmarker = null, connections = [], lastTs = 0;
 const tracker = createTracker();
 let persons = [null, null];
 let series = new Map(), analyzedStride = null, analyzedMode = null, analyzing = false, cancelled = false;
 let captures = [], videoName = '', videoUrl = null;
-let cps = null, cpHtml = '';
-let events = [], eventPerson = 0, probing = false, probeId = 0; // auto-detected hitting poses; fps probe state
-let clicks = [], cal = null, calMode = false, calPickId = COURT_POINTS[0].id, savedCal = null; // court calibration (see section "court")
-let courtTrackNow = [];
-const marks = new Map(); // frame -> {checkpointId: 'pass'|'fail'|'skip'} for type "visual"
+let cps = null;
+let events = [], eventPerson = 0, probing = false, probeId = 0; // auto-detected knee-bend moments; fps probe state
+let fpsOk = false;                      // false until fps is auto-detected or chosen by the user (blocks the full analysis)
+let clicks = [], cal = null, calMode = false, calPickId = COURT_POINTS[0].id, savedCal = null; // court calibration
+let cst = null, courtTrackNow = [];     // cached court statistics (recomputed by refreshData)
+let hist = [];                          // 변화 기록: summaries with diffs
+const openSrc = new Set();              // checkpoint ids whose "근거 보기" is expanded
+const marks = new Map();                // frame -> {checkpointId: 'pass'|'fail'|'skip'} for type "visual"
+
+const ACCENT = '#ffd400';
+const TAB_NAME = { pose: '자세 조정', game: '게임 분석', steps: '스텝·체력', hist: '변화 기록' };
+// Checkpoint groups shown per tab. Lunge items (angle) are judged only in 자세 조정; the 무빙 group lives in 게임 분석.
+const TAB_GROUPS = { pose: ['런지', '준비 자세', '스윙'], game: ['무빙'], steps: [], hist: [] };
+// ponytail: AI-set tab suggestion rules, not coach numbers. Tune here if real footage disagrees.
+const RECO = { twoShare: 0.25, farM: 2, farShare: 0.15 };
+const PLAIN = { ...LABELS, stance_ratio: '발 간격' };
 
 const fps = () => Number($('fps').value) || 60;
 const sel = () => Number(document.querySelector('input[name=person]:checked').value);
 const hand = () => $('hand').value;
 const mode = () => $('mode').value;
+const tab = () => document.body.dataset.tab;
 const total = () => video.duration ? Math.floor(video.duration * fps()) : 0;
 const curFrame = () => Math.min(Math.floor(video.currentTime * fps() + 1e-3), Math.max(total() - 1, 0));
-const status = t => { $('status').textContent = t; };
+const status = t => { $('status').textContent = t; $('status').title = t; };
 const angles = p => personAngles(p, mode(), overlay.width, overlay.height);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+const htmlCache = {};
+const setHtml = (id, html) => { if (htmlCache[id] !== html) { $(id).innerHTML = html; htmlCache[id] = html; } };
 
-$('chartKey').add(new Option('무릎 최소 (자동 감지 기준)', 'knee_min'));
-for (const k of KEYS) $('chartKey').add(new Option(LABELS[k], k));
+$('chartKey').add(new Option('무릎 굽힘 (자동 감지 기준)', 'knee_min'));
+for (const k of KEYS) $('chartKey').add(new Option(PLAIN[k], k));
 $('chartKey').value = 'knee_min';
 $('hand').value = loadSetting('hand', 'R');
 $('mode').value = loadSetting('mode', '2d');
+
+// ---- saved folder handle (IndexedDB), shared by export and 변화 기록 ----
+const idb = () => new Promise((res, rej) => { const r = indexedDB.open('sqc', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+const kv = async (m, fn) => { const db = await idb(); return new Promise((res, rej) => { const t = db.transaction('kv', m), q = fn(t.objectStore('kv')); t.oncomplete = () => res(q.result); t.onerror = () => rej(t.error); }); };
+const kvGet = k => kv('readonly', s => s.get(k)).catch(() => null);
+const kvSet = (k, v) => kv('readwrite', s => s.put(v, k)).catch(() => {});
+// The saved sessions folder (permission is asked every time, as the browser requires); picks one if none is saved or `change`.
+// null = not allowed. Throws AbortError if the picker is cancelled.
+async function sessionsRoot(change = false) {
+  let h = change ? null : await kvGet('dir');
+  if (h) { try { if ((await h.requestPermission({ mode: 'readwrite' })) !== 'granted') h = null; } catch { h = null; } }
+  if (!h) { h = await showDirectoryPicker({ id: 'squash-sessions', mode: 'readwrite' }); await kvSet('dir', h); }
+  $('dirName').textContent = h.name;
+  return h;
+}
+kvGet('dir').then(h => { if (h) $('dirName').textContent = h.name; });
 
 // ---- model ----
 (async () => {
@@ -218,55 +376,77 @@ $('mode').value = loadSetting('mode', '2d');
 // ---- checkpoints data ----
 fetch('./checkpoints.json').then(r => r.json()).then(j => {
   cps = j;
-  const groups = [...new Set(j.checkpoints.map(c => c.group))];
-  $('cpGroup').add(new Option('전체', ''));
-  for (const g of groups) $('cpGroup').add(new Option(g, g));
   if (!loadSetting('hand', '')) { $('hand').value = j.handedness_default || 'R'; }
-  render(); renderCourt();
-}).catch(e => { $('cpList').textContent = 'checkpoints.json을 불러오지 못했습니다: ' + e.message; });
+  buildSources(); refreshData();
+}).catch(e => { status('checkpoints.json을 불러오지 못했습니다: ' + e.message); });
 
 // ---- video loading ----
 function openFile(file) {
   if (!file) return;
   if (videoUrl) URL.revokeObjectURL(videoUrl);
-  probeId++; probing = false; $('fpsAuto').hidden = true; // drop a probe still running for the previous file
+  probeId++; probing = false; fpsOk = false; $('fpsAuto').hidden = true; $('fpsBanner').hidden = true; // drop a probe still running for the previous file
   videoName = file.name;
   $('label').value = file.name.replace(/\.[^.]+$/, ''); // always the new file's name
   series = new Map(); analyzedStride = null; analyzedMode = null; captures = []; events = []; persons = [null, null]; tracker.reset(); marks.clear();
   clicks = []; cal = null; calMode = false; calPickId = COURT_POINTS[0].id; savedCal = readSavedCal(file.name);
-  renderCaptures(); renderEvents(); drawChart(); renderCal(); renderCourt();
+  hrLoad(); renderCaptures(); updateAnalyze(); refreshData();
   $('err').style.display = 'none';
   videoUrl = URL.createObjectURL(file);
   video.src = videoUrl;
 }
 function showDecodeError() {
-  $('stage').hidden = true; $('hint').hidden = false;
+  vbox.hidden = true; $('hint').hidden = false; $('fsBtn').hidden = true; stage.classList.add('empty');
   $('err').style.display = 'block';
   $('err').innerHTML = `<b>이 영상은 브라우저에서 열 수 없습니다.</b> 아이폰 HEVC(H.265) 영상일 가능성이 큽니다.<br>
-    명령 프롬프트에서 아래 명령으로 변환한 뒤 out.mp4를 여세요 (in.mov는 원래 파일 이름으로 바꾸세요).
+    명령 프롬프트(맥은 터미널)에서 아래 명령으로 변환한 뒤 out.mp4를 여세요 (in.mov는 원래 파일 이름으로 바꾸세요).
     <pre>ffmpeg -i in.mov -c:v libx264 -crf 18 -an out.mp4</pre>`;
 }
-$('file').onchange = e => openFile(e.target.files[0]);
-const drop = $('drop');
-drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
-drop.ondragleave = () => drop.classList.remove('over');
-drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); openFile(e.dataTransfer.files[0]); };
+$('file').onchange = e => { openFile(e.target.files[0]); e.target.value = ''; };
+$('hint').onclick = () => $('file').click();
+stage.ondragover = e => { e.preventDefault(); stage.classList.add('over'); };
+stage.ondragleave = () => stage.classList.remove('over');
+stage.ondrop = e => { e.preventDefault(); stage.classList.remove('over'); openFile(e.dataTransfer.files[0]); };
+
+// The video box keeps the video's aspect ratio inside the (fixed-height) stage; the overlay canvas keeps the video's own
+// pixel size and is scaled with the box, so it stays aligned in the window and in fullscreen.
+function fit() {
+  if (!video.videoWidth) return;
+  const s = Math.min(stage.clientWidth / video.videoWidth, stage.clientHeight / video.videoHeight);
+  vbox.style.width = Math.floor(video.videoWidth * s) + 'px'; vbox.style.height = Math.floor(video.videoHeight * s) + 'px';
+}
+new ResizeObserver(fit).observe(stage);
+function toggleFs() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else if (video.videoWidth && stage.requestFullscreen) stage.requestFullscreen().catch(() => {});
+}
+$('fsBtn').onclick = toggleFs;
+document.addEventListener('fullscreenchange', () => { fit(); render(); });
 
 video.onerror = showDecodeError;
 video.onloadedmetadata = async () => {
   if (!video.videoWidth) return showDecodeError();
   overlay.width = video.videoWidth; overlay.height = video.videoHeight;
-  $('hint').hidden = true; $('stage').hidden = false;
+  $('hint').hidden = true; vbox.hidden = false; $('fsBtn').hidden = false; stage.classList.remove('empty'); fit();
   if (savedCal && savedCal.w === overlay.width && savedCal.h === overlay.height) { setClicks(savedCal.clicks, false); status('이 영상 이름으로 저장된 코트 맞춤을 불러왔습니다. 라인이 바닥과 맞는지 확인하세요.'); }
   await seekFrame(0);
   await autoFps();
 };
 video.onseeked = () => { if (!analyzing && !probing) { detect(); render(); } };
 
+// ---- fps: auto-detect, or the user must choose (the full analysis is blocked until one of the two happened) ----
+function updateAnalyze() { $('analyze').disabled = analyzing || (!!video.duration && !fpsOk && !probing); }
+function setFps(v, how) {
+  $('fps').value = v; $('stride').value = strideFor(v); fpsOk = true; $('fpsBanner').hidden = true;
+  const chip = $('fpsAuto'); chip.textContent = `${how} · ${v} fps`; chip.hidden = false;
+  updateAnalyze(); render();
+}
+$('fpsBanner').onclick = e => { const b = e.target.closest('[data-fps]'); if (b) { setFps(Number(b.dataset.fps), '직접 선택'); status(`fps ${b.dataset.fps}로 정했습니다. 이제 전체 분석을 할 수 있습니다.`); } };
+$('fps').onchange = () => setFps(Math.max(1, Number($('fps').value) || 60), '직접 입력');
+
 // fps by measurement: play muted at 0.25x for ~2 s and collect mediaTime gaps from requestVideoFrameCallback
-// (see fpsFromDeltas for why not 1x). Sets fps + stride, or marks "fps 확인 필요" and keeps the field. Restores position/speed.
+// (see fpsFromDeltas for why not 1x). Sets fps + stride, or asks the user (banner). Restores position/speed.
 async function autoFps() {
-  const id = ++probeId, chip = $('fpsAuto');
+  const id = ++probeId;
   let found = null;
   if (video.requestVideoFrameCallback) {
     const t0 = video.currentTime, rate = video.playbackRate, muted = video.muted, deltas = [];
@@ -291,10 +471,10 @@ async function autoFps() {
   }
   if (found) { $('fps').value = found; $('stride').value = strideFor(found); }
   if (probing) { await seekFrame(0); probing = false; } // only runs at file open (frame 0); re-centres it for the new fps
-  chip.textContent = found ? '자동 감지' : 'fps 확인 필요';
-  chip.classList.toggle('warn', !found);
-  chip.hidden = false;
-  status(found ? `fps ${found} 자동 감지, 간격 ${$('stride').value}프레임` : 'fps를 자동으로 알아내지 못했습니다. fps 칸의 값이 맞는지 확인하세요.');
+  fpsOk = !!found; $('fpsBanner').hidden = fpsOk;
+  const chip = $('fpsAuto'); chip.hidden = !found; if (found) chip.textContent = `자동 감지 · ${found} fps`;
+  updateAnalyze();
+  status(found ? `fps ${found} 자동 감지, 간격 ${$('stride').value}프레임` : 'fps를 자동으로 알아내지 못했습니다. 아래에서 영상의 fps를 골라 주세요.');
   render();
 }
 
@@ -311,8 +491,8 @@ function onFrame() {
   if (!analyzing && !probing) { detect(); render(); }
   if (!video.paused) video.requestVideoFrameCallback(onFrame);
 }
-video.onplay = () => video.requestVideoFrameCallback(onFrame);
-video.onpause = () => { if (!analyzing && !probing) { detect(); render(); } };
+video.onplay = () => { $('play').textContent = '정지'; video.requestVideoFrameCallback(onFrame); };
+video.onpause = () => { $('play').textContent = '재생'; if (!analyzing && !probing) { detect(); render(); } };
 
 // ---- pose ----
 function detect() {
@@ -322,103 +502,158 @@ function detect() {
   return persons;
 }
 
-// ---- drawing ----
-function render() {
+// ---- drawing: video overlay + the per-frame (live) parts of the panel ----
+// force = draw the 자세 조정 check box regardless of the tab (used for automatic captures so every PNG looks the same).
+function render(force = false) {
   const W = overlay.width, H = overlay.height, s = sel();
   ctx.clearRect(0, 0, W, H);
-  const p = persons[s], a = angles(p);
+  const p = persons[s], a = angles(p), f = video.duration ? curFrame() : 0;
   if (cal && $('showCourt').checked) drawCourtLines(ctx, H, cal.Hinv, courtCfg().t_radius_m);
   if (calMode) drawCalPoints(ctx, H, clicks);
   // this week's items only (cps.overlay_ids, max 3 lines, angle items): the box stays small so the player is not hidden
-  const rows = overlayRows(a, video.duration ? curFrame() : 0);
+  const rows = overlayRows(a, f, force);
   if (rows.length && $('showCp').checked) {
     const front = a.front === 'l' ? 'L' : a.front === 'r' ? 'R' : '?';
     // ponytail: box goes to the half the player is not in (hip midpoint); a two-player game can still overlap
     const right = !!p && (p.lm[23].x + p.lm[24].x) / 2 < 0.5;
     drawCheckpoints(ctx, W, H, `이번 주 체크 · 앞다리 ${front}`, rows.map(r => overlayRow(r)), right);
   }
-  persons.forEach((q, i) => q && drawSkeleton(ctx, W, H, q.lm, COLORS[i], i === s, connections));
+  persons.forEach((q, i) => q && ($('skel').value === 'all' || i === s) && drawSkeleton(ctx, W, H, q.lm, COLORS[i], i === s, connections));
   if (p) drawKnees(ctx, W, H, p.lm, COLORS[s], a);
   drawBadge(ctx, H, `각도: ${MODE_LABEL[mode()]}`);
-  $('angles').innerHTML = KEYS.map(k => `<tr><td>${LABELS[k]}</td><td>${fmtMetric(k, a[k])}</td></tr>`).join('');
   const t = video.currentTime || 0, m = Math.floor(t / 60);
-  $('info').textContent = `프레임 ${video.duration ? curFrame() : '-'} / ${total() || '-'} · ${fps()} fps · ${String(m).padStart(2, '0')}:${(t - m * 60).toFixed(3).padStart(6, '0')}`;
+  const info = `프레임 ${video.duration ? f : '-'} / ${total() || '-'} · ${String(m).padStart(2, '0')}:${(t - m * 60).toFixed(3).padStart(6, '0')}`;
+  $('info').textContent = info; $('fsInfo').textContent = info;
   $('modeTag').textContent = `각도: ${MODE_LABEL[mode()]}`;
   updateCursor();
-  renderCheckpoints(cpRows(a, video.duration ? curFrame() : 0), a);
+  renderLive(a, f);
 }
 
-// ---- checkpoints panel ----
+// ---- checkpoints ----
 const STATUS_KO = { pass: '통과', fail: '미달', na: '측정 불가', ref: '기준선 비교', skip: '해당없음', unset: '미판정' };
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmtTarget = (t, u) => !t ? '기준 없음' : t.min != null && t.max != null ? `${t.min}~${t.max}${u}` : t.min != null ? `${t.min}${u} 이상` : `${t.max}${u} 이하`;
-const visibleCps = () => cps ? cps.checkpoints.filter(c => !$('cpGroup').value || c.group === $('cpGroup').value) : [];
+const tabCps = () => cps ? cps.checkpoints.filter(c => TAB_GROUPS[tab()].includes(c.group)) : [];
 function evalCp(cp, a, frame) {
   if (cp.type === 'visual') return { value: null, status: marks.get(frame)?.[cp.id] || 'unset' };
   const value = checkpointValue(cp, a, hand());
   return { value, status: judge(value, cp.target) };
 }
-const cpRows = (a, f) => visibleCps().map(cp => ({ cp, ...evalCp(cp, a, f) }));
-// On-video rows: ids from checkpoints.json overlay_ids in that order, angle items only, at most 3.
+const angleCps = () => cps.checkpoints.filter(c => c.type === 'angle');
+const weekCps = () => (cps?.overlay_ids || []).map(id => tabCps().find(c => c.id === id)).filter(c => c && c.type === 'angle').slice(0, OVERLAY_MAX);
+const otherCps = () => tabCps().filter(c => c.type === 'angle' && !(cps.overlay_ids || []).includes(c.id));
+// On-video rows: ids from checkpoints.json overlay_ids in that order, angle items only, at most 3, only items that belong to this tab.
 const OVERLAY_MAX = 3;
-const overlayRows = (a, f) => (cps?.overlay_ids || []).map(id => cps.checkpoints.find(c => c.id === id))
-  .filter(cp => cp && cp.type === 'angle').slice(0, OVERLAY_MAX).map(cp => ({ cp, ...evalCp(cp, a, f) }));
-// Colors on the video: pass green, fail red, not measurable gray, baseline-compare white; visual items follow the toggle.
+const overlayRows = (a, f, force) => (cps?.overlay_ids || []).map(id => cps.checkpoints.find(c => c.id === id))
+  .filter(cp => cp && cp.type === 'angle' && (force || TAB_GROUPS[tab()].includes(cp.group))).slice(0, OVERLAY_MAX).map(cp => ({ cp, ...evalCp(cp, a, f) }));
+// Colors on the video: pass green, fail red, not measurable gray, baseline-compare white.
 const CP_COLOR = { pass: '#3ddc84', fail: '#ff5d5d', na: '#9aa4b2', ref: '#ffffff', skip: '#9aa4b2', unset: '#9aa4b2' };
 function overlayRow({ cp, value, status: st }) {
-  if (cp.type === 'visual') return { name: cp.name, val: STATUS_KO[st], tgt: '', color: CP_COLOR[st] };
   return { name: cp.name, val: st === 'na' ? STATUS_KO.na : fmtMetric(cp.metric, value), tgt: cp.target ? fmtTarget(cp.target, metricUnit(cp.metric)) : '', color: CP_COLOR[st] };
 }
-function renderCheckpoints(rows, a) {
-  if (!cps) return;
-  const html = rows.map(({ cp, value, status: st }) => {
-    const src = cp.source || {};
-    const srcText = esc([src.channel, src.title, src.timestamp].filter(Boolean).join(' · '));
-    const srcHtml = /^https?:\/\//.test(src.url || '') ? `<a href="${esc(src.url)}" target="_blank" rel="noopener">${srcText || '근거 링크'}</a>` : srcText;
-    const body = cp.type === 'visual'
-      ? ['pass', 'fail', 'skip'].map(s => `<button data-id="${esc(cp.id)}" data-s="${s}" class="${st === s ? 'on' : ''}">${STATUS_KO[s]}</button>`).join(' ')
-      : `값 ${fmtMetric(resolveMetric(cp.metric, hand(), a.front), value)} · 목표 ${fmtTarget(cp.target, metricUnit(cp.metric))}`;
-    return `<div class="cp"><b>${esc(cp.name)}</b> <span class="chip st ${st}">${STATUS_KO[st]}</span><div class="dim">${body}</div>` +
-      `<div class="src">${esc(cp.confidence ? '신뢰도 ' + cp.confidence : '')}${srcHtml ? ' · ' + srcHtml : ''}</div></div>`;
-  }).join('') || '<p class="dim">항목이 없습니다.</p>';
-  if (html !== cpHtml) { $('cpList').innerHTML = html; cpHtml = html; }
+function srcHtml(cp) {
+  const s = cp.source || {}, text = esc([s.channel, s.title, s.timestamp].filter(Boolean).join(' · '));
+  const link = /^https?:\/\//.test(s.url || '') ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${text || '근거 링크'} (새 탭)</a>` : text;
+  return `<div>${link}</div>${cp.note ? `<div class="sub">${esc(cp.note)}</div>` : ''}`;
 }
-$('cpList').onclick = e => {
+// Target range bar: the green band is the target, the pin + number above it is my value.
+function rangeBar(cp, key, v, st) {
+  const max = cp.metric === 'stance_ratio' ? 3 : 180, pct = x => Math.max(0, Math.min(100, x / max * 100));
+  const lo = pct(cp.target.min ?? 0), hi = pct(cp.target.max ?? max), pos = pct(v);
+  return `<div class="rng"><div class="mkw"><span class="mk ${st}" style="left:${Math.min(90, Math.max(10, pos))}%">${fmtMetric(key, v)}</span></div>` +
+    `<div class="trk"><i class="tg" style="left:${lo}%;width:${hi - lo}%"></i><i class="pin ${st}" style="left:${pos}%"></i></div>` +
+    `<div class="sub">목표 ${fmtTarget(cp.target, metricUnit(cp.metric))}</div></div>`;
+}
+// Of the automatically found moments: how many passed (items with a target only)
+function evStat(cp) {
+  if (!events.length || !cp.target) return '';
+  const ok = events.filter(e => e.checkpoints.find(x => x.id === cp.id)?.status === 'pass').length;
+  return ` · 감지 ${events.length}번 중 ${ok}번 통과`;
+}
+function itemHtml({ cp, value, status: st }, a) {
+  const key = resolveMetric(cp.metric, hand(), a.front);
+  let body = '';
+  if (cp.type === 'visual') body = `<div class="vbtn">${['pass', 'fail', 'skip'].map(s => `<button data-id="${esc(cp.id)}" data-s="${s}" class="${st === s ? 'on' : ''}">${STATUS_KO[s]}</button>`).join('')}</div>`;
+  else if (cp.target && value != null) body = rangeBar(cp, key, value, st);
+  else body = `<div class="val"><b class="n">${value == null ? '측정 불가' : fmtMetric(key, value)}</b> <span class="sub">${cp.target ? '목표 ' + fmtTarget(cp.target, metricUnit(cp.metric)) : '기준선 비교 (정해진 목표 없음)'}</span></div>`;
+  const dot = cp.type === 'visual' ? st : st === 'na' || st === 'ref' ? '' : st;
+  return `<div class="cp"><div class="cp-h"><i class="dot ${dot}"></i><b>${esc(cp.name)}</b>` +
+    (cp.type === 'angle' && st !== 'ref' ? `<span class="stt ${st}">${STATUS_KO[st]}</span>` : '') + `</div>` +
+    `<div class="sub">${esc(cp.plain || '')}</div>${body}` +
+    `<div class="sub ft">신뢰도 ${esc(cp.confidence || '-')}${evStat(cp)} · <button class="lnk" data-src="${esc(cp.id)}">근거 보기</button></div>` +
+    (openSrc.has(cp.id) ? `<div class="srcbox">${srcHtml(cp)}</div>` : '') + `</div>`;
+}
+const BASIC = ['knee_l', 'knee_r', 'stance_ratio'], MORE = KEYS.filter(k => !BASIC.includes(k));
+function renderLive(a, f) {
+  setHtml('angBasic', BASIC.map(k => `<div><span class="sub">${PLAIN[k]}</span><span class="n">${fmtMetric(k, a[k])}</span></div>`).join(''));
+  setHtml('angMore', MORE.map(k => `<div><span class="sub">${PLAIN[k]}</span><span class="n">${fmtMetric(k, a[k])}</span></div>`).join(''));
+  if (!cps) return;
+  const row = cp => ({ cp, ...evalCp(cp, a, f) }), list = cs => cs.map(cp => itemHtml(row(cp), a)).join('');
+  setHtml('weekList', list(weekCps()) || '<div class="sub">이번 주 체크 항목이 없습니다.</div>');
+  setHtml('otherList', list(otherCps()) || '<div class="sub">없음</div>');
+  setHtml('visList', list(tabCps().filter(c => c.type === 'visual')) || '<div class="sub">이 탭에는 눈으로 확인할 항목이 없습니다.</div>');
+}
+function buildSources() {
+  setHtml('srcList', tabCps().map(cp => `<div class="cp"><b>${esc(cp.name)}</b> <span class="sub">신뢰도 ${esc(cp.confidence || '-')}</span>${srcHtml(cp)}</div>`).join('') || '<div class="sub">이 탭에는 체크 항목이 없습니다.</div>');
+}
+$('panel').addEventListener('click', e => {
   const b = e.target.closest('button[data-id]');
-  if (!b || !video.duration) return;
-  const f = curFrame(), m = marks.get(f) || {};
-  if (m[b.dataset.id] === b.dataset.s) delete m[b.dataset.id]; else m[b.dataset.id] = b.dataset.s;
-  marks.set(f, m); render();
-};
-$('cpGroup').onchange = () => { render(); renderEvents(); };
-$('showCp').onchange = render;
+  if (b && video.duration) {
+    const f = curFrame(), m = marks.get(f) || {};
+    if (m[b.dataset.id] === b.dataset.s) delete m[b.dataset.id]; else m[b.dataset.id] = b.dataset.s;
+    marks.set(f, m); render(); return;
+  }
+  const l = e.target.closest('button[data-src]');
+  if (l) { const id = l.dataset.src; if (!openSrc.delete(id)) openSrc.add(id); render(); }
+});
+$('showCp').onchange = () => render();
+$('skel').onchange = () => render();
 
 // ---- controls ----
 $('play').onclick = () => video.paused ? video.play() : video.pause();
 document.querySelectorAll('[data-step]').forEach(b => b.onclick = () => step(Number(b.dataset.step)));
 function step(n) { if (!video.duration || analyzing || probing) return; video.pause(); seekFrame(curFrame() + n); }
-document.querySelectorAll('input[name=person]').forEach(r => r.onchange = () => { render(); drawChart(); renderCourt(); });
-$('fps').onchange = () => { $('fpsAuto').hidden = true; $('stride').value = strideFor(fps()); render(); };
+document.querySelectorAll('input[name=person]').forEach(r => r.onchange = () => refreshData());
 $('chartKey').onchange = drawChart;
 $('hand').onchange = () => { saveSetting('hand', hand()); render(); };
 $('mode').onchange = () => { saveSetting('mode', mode()); render(); drawChart(); };
 document.addEventListener('keydown', e => {
-  if (e.target.matches?.('input:not([type=radio]), select, textarea') || !video.duration) return;
+  if (e.target.matches?.('input:not([type=radio]), select, textarea')) return;
+  if (e.code === 'KeyF' && !e.ctrlKey && !e.metaKey) { toggleFs(); return; }
+  if (!video.duration || tab() === 'hist') return;
   if (e.code === 'Space') { e.preventDefault(); if (!analyzing) $('play').click(); }
   else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); step((e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 10 : 1)); }
   else if (e.code === 'KeyC' && !e.ctrlKey && !e.metaKey) capture();
 });
+// buttons give up focus after a click so that Space / arrows keep controlling the video
+document.addEventListener('click', e => {
+  e.target.closest?.('button')?.blur();
+  document.querySelectorAll('details.pop[open]').forEach(d => { if (!d.contains(e.target)) d.open = false; });
+  const t = e.target.closest?.('[data-tab]');
+  if (t) setTab(t.dataset.tab);
+});
+
+// ---- tabs ----
+function setTab(t) {
+  document.body.dataset.tab = t;
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+  saveSetting('tab', t);
+  if (calMode && t !== 'game' && t !== 'steps') calMode = false;
+  if (t === 'hist') { video.pause(); loadHistory(); return; }
+  if (t === 'game') $('visSec').open = true;
+  buildSources(); refreshData();
+}
 
 // ---- full analysis ----
 $('analyze').onclick = async () => {
   if (!video.duration) return status('먼저 영상을 여세요.');
   if (!landmarker) return status('모델이 아직 준비되지 않았습니다.');
   if (probing) return status('fps를 알아내는 중입니다. 잠시 뒤에 다시 누르세요.');
+  if (!fpsOk) return status('영상의 fps를 먼저 골라 주세요.');
   const stride = Math.max(1, Number($('stride').value) || 2), n = total();
-  analyzing = true; cancelled = false; video.pause();
+  analyzing = true; cancelled = false; video.pause(); updateAnalyze();
   series = new Map(); tracker.reset(); analyzedStride = stride; analyzedMode = mode();
   events = []; captures = captures.filter(c => !c.auto); renderEvents(); // a new analysis replaces the previous auto results
-  $('prog').hidden = $('cancel').hidden = false; $('analyze').disabled = true; $('mode').disabled = true;
+  $('prog').hidden = $('cancel').hidden = false; $('mode').disabled = true;
   for (let f = 0; f < n && !cancelled; f += stride) {
     await seekFrame(f);
     const ps = detect(); render();
@@ -426,19 +661,16 @@ $('analyze').onclick = async () => {
     $('prog').value = f / n;
     if (f % (stride * 10) === 0) drawChart();
   }
-  drawChart();
   if (!cancelled) await autoDetect();
-  analyzing = false;
-  $('prog').hidden = $('cancel').hidden = true; $('analyze').disabled = false; $('mode').disabled = false;
-  status(`${cancelled ? '분석 취소됨' : '분석 완료'}: ${series.size}개 프레임 (${MODE_LABEL[analyzedMode]})${events.length ? ` · 자동 감지 ${events.length}회` : ''}`);
-  drawChart();
-  renderCourt();
+  analyzing = false; updateAnalyze();
+  $('prog').hidden = $('cancel').hidden = true; $('mode').disabled = false;
+  status(`${cancelled ? '분석 취소됨' : '분석 완료'}: ${series.size}개 프레임 (${MODE_LABEL[analyzedMode]})${events.length ? ` · 무릎 굽힘 ${events.length}회 감지` : ''}`);
   renderCaptures();
+  refreshData();
   if (events.length) await seekFrame(events[0].frame);
 };
 
 // ---- auto detect: knee-bend moments (not claimed to be lunges or hits) of the selected person -> pose re-detected on that frame -> auto capture
-const angleCps = () => cps.checkpoints.filter(c => c.type === 'angle');
 async function autoDetect() {
   const P = cps?.auto_detect;
   if (!P) return status('checkpoints.json에 auto_detect가 없어 자동 감지를 건너뜁니다.');
@@ -451,23 +683,19 @@ async function autoDetect() {
     // ponytail: with two players, keep the one whose signal matches the analysis value (no re-identification)
     const gap = p => { const v = p && signalValue(P.signal, angles(p)); return v == null ? Infinity : Math.abs(v - e.value); };
     if (gap(persons[1 - s]) < gap(persons[s])) persons = [persons[1], persons[0]];
-    render();
     const a = angles(persons[s]), c = await capture({ auto: true, note: `자동 감지 #${i + 1}` });
     events.push({ n: i + 1, frame: c.frame, time_sec: c.time_sec, front: a.front ?? null, angles: c.angles, checkpoints: c.checkpoints });
   }
-  renderEvents();
 }
+const blobUrls = new WeakMap();
+const urlOf = b => { if (!blobUrls.has(b)) blobUrls.set(b, URL.createObjectURL(b)); return blobUrls.get(b); };
 function renderEvents() {
   const n = events.length;
-  $('evBox').textContent = !series.size ? '전체 분석이 끝나면 자동으로 찾아서 담습니다.' : n ? `자동 감지 ${n}회 (${eventPerson + 1}번 사람)` : '감지된 지점이 없습니다.';
-  $('evList').innerHTML = events.map(e => `<li><button data-f="${e.frame}">#${e.n} · 프레임 ${e.frame} · ${e.time_sec.toFixed(2)}초 · 앞다리 ${e.front ? e.front.toUpperCase() : '?'}</button></li>`).join('');
-  $('evNote').hidden = !n;
-  // summary follows the group chosen in the checkpoint panel ("전체" = every angle item)
-  $('evSum').innerHTML = !n ? '' : visibleCps().filter(c => c.type === 'angle').map(cp => {
-    const rs = events.map(e => e.checkpoints.find(x => x.id === cp.id));
-    if (cp.target) return `<li>${esc(cp.name)}: 통과 ${rs.filter(r => r?.status === 'pass').length}/${n}, 측정 불가 ${rs.filter(r => r?.status === 'na').length}/${n}</li>`;
-    const v = rs.map(r => r?.value).filter(x => x != null);
-    return `<li>${esc(cp.name)} (기준선 비교): ${v.length ? `평균 ${fmtMetric(cp.metric, v.reduce((x, y) => x + y) / v.length)} (측정 ${v.length}/${n})` : '측정 불가'}</li>`;
+  $('evHead').textContent = !series.size ? '전체 분석을 하면 자동으로 찾아서 담습니다.' : n ? `${eventPerson + 1}번 사람 · ${n}회 · 눌러서 그 장면으로 이동` : '감지된 지점이 없습니다.';
+  $('evList').innerHTML = events.map(e => {
+    const k = signalValue('knee_min', e.angles), r = e.angles.stance_ratio, c = captures.find(x => x.auto && x.frame === e.frame);
+    return `<li><button data-f="${e.frame}">${c ? `<img src="${urlOf(c.blob)}" alt="">` : ''}<span class="evt"><b class="n">#${e.n} · ${e.time_sec.toFixed(2)}초</b>` +
+      `<span class="sub">무릎 ${k == null ? '-' : Math.round(k) + '°'} · 발 간격 ${r == null ? '-' : r.toFixed(2) + '배'} · 앞다리 ${e.front ? e.front.toUpperCase() : '?'}</span></span></button></li>`;
   }).join('');
 }
 $('evList').onclick = e => {
@@ -476,20 +704,27 @@ $('evList').onclick = e => {
 };
 $('cancel').onclick = () => { cancelled = true; };
 
-// ---- chart ----
-const CW = 1000, CH = 220, PL = 44, PR = 10, PT = 10, PB = 24;
+// ---- chart (자세 조정) ----
+const CW = 1000, PL = 44, PR = 10, PT = 10, PB = 24;
+let CH = 220;
+// The svg fills its box; the viewBox gets the box's aspect ratio so text and lines are never stretched. Returns the height.
+function fitBox(svg, fallback) {
+  const w = svg.clientWidth, h = svg.clientHeight, vh = w && h ? Math.max(100, Math.round(CW * h / w)) : fallback;
+  svg.setAttribute('viewBox', `0 0 ${CW} ${vh}`); return vh;
+}
 const cx = f => PL + f / Math.max(total() - 1, 1) * (CW - PL - PR);
 const RATIO_MAX = 3; // stance_ratio axis 0..3
 const chartMax = key => key === 'stance_ratio' ? RATIO_MAX : 180;
 let cy = v => v;
 function drawChart() {
   const key = $('chartKey').value, s = sel(), svg = $('chart'), max = chartMax(key);
+  CH = fitBox(svg, 220);
   cy = v => CH - PB - Math.min(v, max) / max * (CH - PT - PB);
   const k = cps?.auto_detect?.smooth ?? 5;
   $('chartMode').textContent = !series.size ? '' : (analyzedMode === mode()
-    ? `· 그래프 기준: ${MODE_LABEL[analyzedMode]}` : `· 그래프는 ${MODE_LABEL[analyzedMode]} 기준입니다 (현재 ${MODE_LABEL[mode()]}). 다시 분석하세요.`) + ` · 중앙값 ${k}개로 평활`;
+    ? `· 기준: ${MODE_LABEL[analyzedMode]}` : `· 그래프는 ${MODE_LABEL[analyzedMode]} 기준입니다 (현재 ${MODE_LABEL[mode()]}). 다시 분석하세요.`);
   let grid = '';
-  for (const v of [0, 1, 2, 3, 4].map(i => i * max / 4)) grid += `<line x1="${PL}" x2="${CW - PR}" y1="${cy(v)}" y2="${cy(v)}" stroke="#2c333d"/><text x="${PL - 6}" y="${cy(v) + 4}" fill="#9aa4b2" font-size="12" text-anchor="end">${key === 'stance_ratio' ? v.toFixed(2) : v + '°'}</text>`;
+  for (const v of [0, 1, 2, 3, 4].map(i => i * max / 4)) grid += `<line x1="${PL}" x2="${CW - PR}" y1="${cy(v)}" y2="${cy(v)}" stroke="#2c333d"/><text x="${PL - 6}" y="${cy(v) + 4}" fill="#9aa4b2" font-size="13" text-anchor="end">${key === 'stance_ratio' ? v.toFixed(2) : v + '°'}</text>`;
   let d = '', pen = false, dots = '';
   const frames = [...series.keys()].sort((a, b) => a - b);
   const vals = medianSmooth(frames.map(f => key === 'knee_min' ? signalValue(key, series.get(f)[s]) : series.get(f)[s]?.[key]), k);
@@ -498,31 +733,28 @@ function drawChart() {
     if (v == null) { pen = false; return; }
     d += `${pen ? 'L' : 'M'}${cx(f).toFixed(1)},${cy(v).toFixed(1)}`; pen = true;
     if (s === eventPerson && events.some(e => e.frame === f))
-      dots += `<circle cx="${cx(f).toFixed(1)}" cy="${cy(v).toFixed(1)}" r="6" fill="#ffd400" stroke="#000" stroke-width="1.5"/>` +
-        `<text x="${cx(f).toFixed(1)}" y="${(cy(v) - 10).toFixed(1)}" fill="#ffd400" font-size="13" font-weight="700" text-anchor="middle">${events.find(e => e.frame === f).n}</text>`;
+      dots += `<circle cx="${cx(f).toFixed(1)}" cy="${cy(v).toFixed(1)}" r="6" fill="${ACCENT}" stroke="#000" stroke-width="1.5"/>` +
+        `<text x="${cx(f).toFixed(1)}" y="${(cy(v) - 10).toFixed(1)}" fill="${ACCENT}" font-size="14" font-weight="700" text-anchor="middle">${events.find(e => e.frame === f).n}</text>`;
   });
-  const empty = series.size ? '' : `<text x="${CW / 2}" y="${CH / 2}" fill="#9aa4b2" font-size="16" text-anchor="middle">전체 분석을 실행하면 그래프가 나타납니다</text>`;
+  const empty = series.size ? '' : `<text x="${CW / 2}" y="${CH / 2}" fill="#9aa4b2" font-size="17" text-anchor="middle">전체 분석을 실행하면 그래프가 나타납니다</text>`;
   svg.innerHTML = grid + empty + `<path d="${d}" fill="none" stroke="${COLORS[s]}" stroke-width="2.5" stroke-linejoin="round"/>` + dots +
-    `<line id="cursor" y1="${PT}" y2="${CH - PB}" stroke="#ffd400" stroke-width="2"/>`;
+    `<line id="cursor" y1="${PT}" y2="${CH - PB}" stroke="#fff" stroke-width="2"/>`;
   updateCursor();
 }
 function updateCursor() {
-  const c = $('cursor'); if (!c) return;
-  const x = video.duration ? cx(curFrame()) : PL;
-  c.setAttribute('x1', x); c.setAttribute('x2', x);
-  const mc = $('mapCur'), p = persons[sel()];
-  if (mc) { // live position on the map (works without a full analysis)
-    const q = cal && p ? courtPos(cal.H, footPoint(p.lm, overlay.width, overlay.height)) : null;
-    mc.setAttribute('cx', q ? q[0] : -9); mc.setAttribute('cy', q ? q[1] : -9); mc.style.display = q ? '' : 'none';
-  }
+  const c = $('cursor');
+  if (c) { const x = video.duration ? cx(curFrame()) : PL; c.setAttribute('x1', x); c.setAttribute('x2', x); }
+  const p = persons[sel()]; // live position on the map (works without a full analysis)
+  const q = cal && p ? courtPos(cal.H, footPoint(p.lm, overlay.width, overlay.height)) : null;
+  document.querySelectorAll('.mapCur').forEach(mc => { mc.setAttribute('cx', q ? q[0] : -9); mc.setAttribute('cy', q ? q[1] : -9); mc.style.display = q ? '' : 'none'; });
 }
 $('chart').onclick = e => {
   if (!video.duration || analyzing) return;
   const r = $('chart').getBoundingClientRect(), x = (e.clientX - r.left) / r.width * CW;
   video.pause(); seekFrame(Math.round((x - PL) / (CW - PL - PR) * (total() - 1)));
 };
-drawChart();
-render();
+new ResizeObserver(() => { drawChart(); drawBars(); }).observe($('gwrap'));
+new ResizeObserver(() => { if (tab() === 'pose') drawChart(); else if (tab() === 'steps') drawBars(); }).observe($('chart'));
 
 // ---- court: calibration (click floor marks -> homography), T occupancy, corner visits ----
 // The pixel point under the player is stored per analysed frame (series[..].foot); court metres are derived from the
@@ -532,18 +764,22 @@ const readSavedCal = name => { try { return JSON.parse(loadSetting('court_' + na
 function setClicks(list, save = true) {
   clicks = list; cal = list.length >= 4 ? calibrate(list) : null;
   if (save && videoName) saveSetting('court_' + videoName, JSON.stringify({ w: overlay.width, h: overlay.height, clicks }));
-  renderCal(); renderCourt(); render();
+  refreshData();
 }
 function renderCal() {
   const nth = new Map(clicks.map((c, i) => [c.id, i + 1]));
   $('calPick').innerHTML = COURT_POINTS.map(p => `<option value="${p.id}">${esc(p.name)}${nth.has(p.id) ? ` (찍음 #${nth.get(p.id)})` : ''}</option>`).join('');
   $('calPick').value = calPickId;
-  $('calPickBox').hidden = !calMode; $('stage').classList.toggle('cal', calMode);
+  $('calPickBox').hidden = !calMode; stage.classList.toggle('cal', calMode);
   $('calStart').textContent = calMode ? '맞추기 끝내기' : '코트 맞추기';
   $('calUndo').disabled = $('calReset').disabled = !clicks.length;
+  const cur = !cal ? (calMode || clicks.length ? 2 : 1) : series.size ? 4 : 3;
+  const steps = ['[코트 맞추기]를 누릅니다. 영상이 멈춥니다.', '목록에서 점 이름을 고르고 영상의 바닥 그 위치를 누릅니다. 보이는 점만 4개 이상.',
+    '빨간 코트 선이 영상의 바닥 선과 겹치는지 눈으로 확인합니다.', '[전체 분석]을 누르면 결과가 나옵니다.'];
+  $('calSteps').innerHTML = `<div><b>${cur}/4 단계</b> · ${steps[cur - 1]}</div>`;
   $('calInfo').textContent = !clicks.length ? '' : clicks.length < 4 ? `점 ${clicks.length}개 — 4개 이상 필요합니다.`
     : !cal ? `점 ${clicks.length}개 — 계산할 수 없습니다(점이 한 줄에 가깝거나 겹쳤습니다). 다른 위치의 점을 더 찍으세요.`
-    : `점 ${clicks.length}개 · 선 맞춤 오차 평균 ${cal.reproj_px.toFixed(1)}px (작을수록 좋음). 영상 위 빨간 선이 바닥 선과 겹치는지 눈으로 확인하세요.`;
+    : `점 ${clicks.length}개 · 선 맞춤 오차 평균 ${cal.reproj_px.toFixed(1)}px (작을수록 좋음)`;
 }
 $('calStart').onclick = () => {
   if (!video.duration) return status('먼저 영상을 여세요.');
@@ -553,9 +789,9 @@ $('calStart').onclick = () => {
 $('calUndo').onclick = () => { const last = clicks[clicks.length - 1]; if (last) { calPickId = last.id; setClicks(clicks.slice(0, -1)); } };
 $('calReset').onclick = () => { calPickId = COURT_POINTS[0].id; setClicks([]); };
 $('calPick').onchange = e => { calPickId = e.target.value; e.target.blur(); }; // blur: keep Space/arrow keys working for the video
-$('showCourt').onchange = render;
-$('stage').addEventListener('click', e => {
-  if (!calMode || !video.duration || analyzing || probing) return;
+$('showCourt').onchange = () => render();
+stage.addEventListener('click', e => {
+  if (!calMode || !video.duration || analyzing || probing || !e.target.closest('#vbox')) return;
   const r = video.getBoundingClientRect();
   const px = [(e.clientX - r.left) / r.width * overlay.width, (e.clientY - r.top) / r.height * overlay.height];
   setClicks([...clicks.filter(c => c.id !== calPickId), { id: calPickId, px }]); // clicking a used mark again moves it
@@ -570,63 +806,133 @@ function courtStats() {
   const ex = detectExcursions(track, T, o), avg = cornerAvg(ex);
   return { track, o, occ: tOccupancy(track, o.t_radius_m), ex, avg, slow: slowestCorner(avg), total: totalSec(ex) };
 }
+// Everything that depends on the analysis result, the court or the selected person. Not per video frame.
+function refreshData() {
+  cst = courtStats(); courtTrackNow = cst.track;
+  renderSummary(); renderEvents(); renderCal(); renderMaps(); renderVisits(); renderHr(); renderReco();
+  drawChart(); drawBars(); render();
+}
+
+// ---- summary card (top of the panel) ----
+const stat = (label, val, sub = '', cls = '') => `<div class="stat ${cls}"><div class="sub">${label}</div><div class="n big">${val}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>`;
+function renderSummary() {
+  const t = tab(), st = cst, o = st.o, ok = !!(cal && series.size && st.occ.valid);
+  let h = '', note = '';
+  if (t === 'pose') {
+    const n = events.length, ks = events.map(e => signalValue('knee_min', e.angles)).filter(x => x != null), ss = events.map(e => e.angles.stance_ratio).filter(x => x != null);
+    const has = series.size > 0;
+    h = stat('무릎 굽힘', has ? n + '회' : '-', '크게 굽은 횟수') + stat('평균 최저 무릎', ks.length ? Math.round(mean(ks)) + '°' : '-', '작을수록 깊이 굽힘') +
+      stat('평균 발 간격', ss.length ? mean(ss).toFixed(2) + '배' : '-', '엉덩이 폭의 몇 배');
+    note = has ? '' : '전체 분석을 누르면 채워집니다.';
+  } else if (t === 'game') {
+    h = stat('T 점유율', ok ? st.occ.pct.toFixed(0) + '%' : '-', ok ? `위치가 잡힌 ${st.occ.valid}/${st.occ.total}개 중` : '');
+    note = !cal ? '아래에서 코트 맞추기를 먼저 하세요.' : !series.size ? '전체 분석을 하면 나옵니다.'
+      : ok ? `T에서 ${o.t_radius_m}m 안에 있던 시간의 비율입니다. 랠리 사이 쉬는 시간도 들어갑니다.` : '코트 안에서 잡힌 위치가 없습니다. 코트 맞춤을 확인하세요.';
+  } else if (t === 'steps') {
+    const n = st.ex.length, slow = st.slow;
+    h = stat('고스팅 총시간', ok && st.total != null ? st.total.toFixed(1) + '초' : '-', '첫 이탈~마지막 복귀') +
+      stat('방문', ok ? n + '회' : '-', ok ? (n === 18 ? '6코너 x 3바퀴' : `<span class="bad">18회가 아님 (${n}회 감지)</span>`) : '') +
+      stat('가장 느린 코너', slow ? CORNER_LABEL[slow] : '-', slow ? st.avg[slow].avg_sec.toFixed(2) + '초' : '', 'hl');
+    note = !cal ? '아래에서 코트 맞추기를 먼저 하세요.' : !series.size ? '전체 분석을 하면 나옵니다.' : ok ? '' : '코트 안에서 잡힌 위치가 없습니다. 코트 맞춤을 확인하세요.';
+  }
+  setHtml('sum', `<h2>결과 요약</h2><div class="stats">${h}</div>${note ? `<div class="sub note">${note}</div>` : ''}`);
+}
+
+// ---- tab suggestion (text only; never switches by itself) ----
+function recommend() {
+  if (!series.size) return null;
+  const fr = [...series.values()];
+  if (fr.filter(ps => ps[0] && ps[1]).length / fr.length >= RECO.twoShare) return 'game';
+  const v = cst.track.filter(q => q.p);
+  if (cal && v.length && v.filter(q => Math.hypot(q.p[0] - T[0], q.p[1] - T[1]) >= RECO.farM).length / v.length >= RECO.farShare) return 'steps';
+  return 'pose';
+}
+const RECO_TEXT = { game: '게임 영상 같아요 (두 사람이 자주 잡혔어요).', steps: '코트를 크게 도는 영상 같아요.', pose: '한 사람이 제자리에서 연습하는 영상 같아요.' };
+function renderReco() {
+  const r = recommend(), show = !!r && r !== tab() && tab() !== 'hist';
+  $('reco').hidden = !show;
+  if (show) $('reco').innerHTML = `<span>${RECO_TEXT[r]} -> <b>${TAB_NAME[r]}</b> 탭</span><button data-tab="${r}">열기</button>`;
+}
+
+// ---- maps, visit table, corner bars ----
 const MAP_VB = { x: -0.4, y: -0.4, w: 7.2, h: 10.55 }; // metres around the court, front wall at the top
-function renderCourt() {
-  const st = courtStats(), o = st.o, ok = cal && series.size && st.occ.valid;
-  courtTrackNow = st.track;
-  $('courtMsg').textContent = !cal ? '오른쪽 "코트 맞추기"를 하면 T 점유율과 이동 지도가 나옵니다.' : !series.size ? '전체 분석을 하면 이동 지도와 T 점유율이 나옵니다.'
-    : ok ? '' : '코트 안에서 잡힌 위치가 없습니다. 코트 맞춤을 확인하세요.';
-  const chip = $('tOcc'); chip.hidden = !ok; if (ok) chip.textContent = `T 점유율 ${st.occ.pct.toFixed(0)}%`;
-  // map: floor, T circle, lines, position dots (light -> dark with time), numbered far points of corner visits
+function renderMaps() {
+  const st = cst, o = st.o, ok = cal && series.size && st.occ.valid;
+  $('mapMsg').textContent = !cal ? '"코트 맞추기"를 하면 이동 지도가 나옵니다.' : !series.size ? '전체 분석을 하면 이동 지도가 나옵니다.' : ok ? '' : '코트 안에서 잡힌 위치가 없습니다. 코트 맞춤을 확인하세요.';
   const f2 = x => x.toFixed(2), v = st.track.filter(q => q.p);
   let g = `<rect x="0" y="0" width="${COURT.width}" height="${COURT.length}" fill="#efe6cf"/>` +
-    `<circle cx="${T[0]}" cy="${T[1]}" r="${o.t_radius_m}" fill="rgba(255,212,0,.28)" stroke="#d4a900" stroke-width=".04"/>` +
+    `<circle cx="${T[0]}" cy="${T[1]}" r="${o.t_radius_m}" fill="rgba(60,140,200,.22)" stroke="#3c8cc8" stroke-width=".04"/>` +
     COURT_LINES.map(([a, b]) => `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="#c0392b" stroke-width=".06"/>`).join('') +
     `<text x="${T[0]}" y="-.12" font-size=".32" fill="#555" text-anchor="middle">앞벽</text><text x="${T[0]}" y="${COURT.length + .36}" font-size=".32" fill="#555" text-anchor="middle">뒷벽</text>`;
   v.forEach((q, i) => { g += `<circle cx="${f2(q.p[0])}" cy="${f2(q.p[1])}" r=".05" fill="hsl(210,85%,${(72 - 44 * (v.length > 1 ? i / (v.length - 1) : 1)).toFixed(0)}%)"/>`; });
   st.ex.forEach((e, i) => { g += `<circle cx="${f2(e.far_m[0])}" cy="${f2(e.far_m[1])}" r=".16" fill="none" stroke="#e67e22" stroke-width=".05"/>` +
     `<text x="${f2(e.far_m[0])}" y="${f2(e.far_m[1] - .22)}" font-size=".34" font-weight="700" fill="#a04000" text-anchor="middle">${i + 1}</text>`; });
-  $('map').innerHTML = g + '<circle id="mapCur" r=".16" fill="#ffd400" stroke="#000" stroke-width=".04" style="display:none"/>';
+  g += `<circle class="mapCur" r=".2" fill="${ACCENT}" stroke="#000" stroke-width=".04" style="display:none"/>`;
+  $('map').innerHTML = g; $('map2').innerHTML = g;
   updateCursor();
-  // results: T occupancy, visit list, per-corner mean with the slowest corner highlighted
-  const sec = x => x.toFixed(2);
-  let h = '';
-  if (ok) {
-    const n = st.ex.length;
-    h += `<div><b>T 점유율 ${st.occ.pct.toFixed(1)}%</b> <span class="dim">(위치가 잡힌 ${st.occ.valid}/${st.occ.total} 프레임 중 T에서 ${o.t_radius_m}m 안 ${st.occ.inside}개. 랠리 사이 쉬는 시간도 포함됩니다.)</span></div>`;
-    h += `<div style="margin-top:8px"><b>고스팅 방문 ${n}회</b> ${n === 18 ? '<span class="dim">(6코너 x 3바퀴)</span>' : `<span class="warn">18회가 아님 (${n}회 감지)</span>`}` +
-      `${st.total != null ? ` · 첫 이탈~마지막 복귀 <b>${sec(st.total)}초</b>` : ''}</div>`;
-    if (n) {
-      h += '<table><tr><th>#</th><th class="l">코너</th><th>이탈</th><th>먼 점</th><th>복귀</th><th>소요(초)</th></tr>' +
-        st.ex.map((e, i) => `<tr data-f="${Math.round(e.far_sec * fps())}"><td>${i + 1}</td><td class="l">${CORNER_LABEL[e.corner]}</td><td>${sec(e.start_sec)}</td><td>${sec(e.far_sec)}</td><td>${sec(e.return_sec)}</td><td>${sec(e.duration_sec)}</td></tr>`).join('') + '</table>';
-      h += '<table><tr><th class="l">코너</th><th>횟수</th><th>평균(초)</th><th class="l"></th></tr>' +
-        CORNERS.map(c => `<tr class="${c === st.slow ? 'slow' : ''}"><td class="l">${CORNER_LABEL[c]}</td><td>${st.avg[c].n}</td><td>${st.avg[c].n ? sec(st.avg[c].avg_sec) : '-'}</td><td class="l">${c === st.slow ? '가장 느림' : ''}</td></tr>`).join('') + '</table>';
-    } else h += `<p class="dim">T에서 ${o.away_m}m 넘게 나갔다가 돌아온 구간이 없습니다.</p>`;
-  }
-  $('ghost').innerHTML = h;
+}
+function renderVisits() {
+  const st = cst, o = st.o, ok = cal && series.size && st.occ.valid, sec = x => x.toFixed(2);
+  if (!ok) return setHtml('visits', '<span class="sub">코트를 맞추고 전체 분석을 하면 나옵니다.</span>');
+  const n = st.ex.length;
+  setHtml('visits', !n ? `<span class="sub">T에서 ${o.away_m}m 넘게 나갔다가 돌아온 구간이 없습니다.</span>`
+    : '<table class="t"><tr><th>#</th><th class="l">코너</th><th>나감</th><th>가장 먼 점</th><th>복귀</th><th>걸린 시간</th></tr>' +
+      st.ex.map((e, i) => `<tr data-f="${Math.round(e.far_sec * fps())}"><td>${i + 1}</td><td class="l">${CORNER_LABEL[e.corner]}</td><td>${sec(e.start_sec)}</td><td>${sec(e.far_sec)}</td><td>${sec(e.return_sec)}</td><td class="n">${sec(e.duration_sec)}초</td></tr>`).join('') + '</table>');
 }
 const seekCourt = f => { if (video.duration && !analyzing && !probing) { video.pause(); seekFrame(f); } };
-$('ghost').onclick = e => { const r = e.target.closest('tr[data-f]'); if (r) seekCourt(Number(r.dataset.f)); };
-$('map').onclick = e => {
-  const r = $('map').getBoundingClientRect(), mx = MAP_VB.x + (e.clientX - r.left) / r.width * MAP_VB.w, my = MAP_VB.y + (e.clientY - r.top) / r.height * MAP_VB.h;
-  let best = null, bd = Infinity;
-  for (const q of courtTrackNow) if (q.p) { const d = Math.hypot(q.p[0] - mx, q.p[1] - my); if (d < bd) { bd = d; best = q; } }
-  if (best) seekCourt(best.frame);
-};
-renderCal(); renderCourt();
+$('visits').onclick = e => { const r = e.target.closest('tr[data-f]'); if (r) seekCourt(Number(r.dataset.f)); };
+function mapClick(svg) {
+  return e => {
+    const r = svg.getBoundingClientRect(), mx = MAP_VB.x + (e.clientX - r.left) / r.width * MAP_VB.w, my = MAP_VB.y + (e.clientY - r.top) / r.height * MAP_VB.h;
+    let best = null, bd = Infinity;
+    for (const q of courtTrackNow) if (q.p) { const d = Math.hypot(q.p[0] - mx, q.p[1] - my); if (d < bd) { bd = d; best = q; } }
+    if (best) seekCourt(best.frame);
+  };
+}
+$('map').onclick = mapClick($('map')); $('map2').onclick = mapClick($('map2'));
+
+function drawBars() {
+  const svg = $('bars'), H = fitBox(svg, 220), st = cst;
+  if (!st) return;
+  const has = cal && series.size && st.ex.length;
+  if (!has) { svg.innerHTML = `<text x="${CW / 2}" y="${H / 2}" fill="#9aa4b2" font-size="17" text-anchor="middle">${!cal ? '코트를 맞추고 전체 분석을 하면 코너별 시간이 막대로 나옵니다' : !series.size ? '전체 분석을 하면 코너별 시간이 막대로 나옵니다' : '코너 방문이 감지되지 않았습니다'}</text>`; return; }
+  const top = 36, bot = 48, w = CW / CORNERS.length, bw = Math.min(110, w * 0.6);
+  const max = Math.max(...CORNERS.filter(c => st.avg[c].n).map(c => st.avg[c].avg_sec)) * 1.1 || 1;
+  svg.innerHTML = CORNERS.map((c, i) => {
+    const a = st.avg[c], x = w * i + (w - bw) / 2, h = a.n ? a.avg_sec / max * (H - top - bot) : 0, y = H - bot - h, hl = c === st.slow;
+    return `<rect x="${x}" y="${H - bot - 1}" width="${bw}" height="1" fill="#46556a"/>` + (a.n ? `<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="4" fill="${hl ? ACCENT : '#5b7da6'}"/>` +
+      `<text x="${x + bw / 2}" y="${y - 8}" fill="${hl ? ACCENT : '#e8ecf1'}" font-size="18" font-weight="700" text-anchor="middle">${a.avg_sec.toFixed(2)}초</text>` : `<text x="${x + bw / 2}" y="${H - bot - 8}" fill="#9aa4b2" font-size="14" text-anchor="middle">기록 없음</text>`) +
+      `<text x="${x + bw / 2}" y="${H - bot + 20}" fill="#e8ecf1" font-size="15" text-anchor="middle">${CORNER_LABEL[c]}</text>` +
+      `<text x="${x + bw / 2}" y="${H - bot + 38}" fill="#9aa4b2" font-size="13" text-anchor="middle">${a.n}회</text>`;
+  }).join('');
+}
+
+// ---- recovery heart rate (스텝·체력): A right after the test, B one minute later ----
+const hrVal = id => { const v = $(id).value; return v === '' ? null : Number(v); };
+const hrData = () => ({ a: hrVal('hrA'), b: hrVal('hrB'), recovery: recoveryHr(hrVal('hrA'), hrVal('hrB')) });
+function hrLoad() {
+  let h = null; try { h = JSON.parse(loadSetting('hr_' + videoName, 'null')); } catch { /* ignore */ }
+  $('hrA').value = h?.a ?? ''; $('hrB').value = h?.b ?? ''; renderHr();
+}
+function renderHr() {
+  const h = hrData();
+  $('hrOut').innerHTML = h.recovery == null ? '두 칸을 모두 채우면 회복 심박(A - B)이 자동으로 계산됩니다. 클수록 회복이 빠른 것입니다.'
+    : `회복 심박 <b class="n">${h.recovery} bpm</b> (A ${h.a} - B ${h.b})`;
+}
+for (const id of ['hrA', 'hrB']) $(id).oninput = () => { renderHr(); if (videoName) saveSetting('hr_' + videoName, JSON.stringify({ a: hrVal('hrA'), b: hrVal('hrB') })); };
 
 // ---- capture ----
 $('capture').onclick = () => capture();
-// auto = taken by auto detect: note given, all angle checkpoints judged (not just the visible group), own file name.
+// auto = taken by auto detect: note given, all angle checkpoints judged (not just this tab's), own file name, always with the 자세 조정 check box.
 async function capture({ auto = false, note } = {}) {
   if (!video.videoWidth) return null;
+  if (auto) render(true);
   const c = document.createElement('canvas'); c.width = overlay.width; c.height = overlay.height;
   const g = c.getContext('2d'); g.drawImage(video, 0, 0); g.drawImage(overlay, 0, 0);
   const blob = await new Promise(res => c.toBlob(res, 'image/png'));
   const f = curFrame(), s = sel(), a = angles(persons[s]);
-  const checkpoints = (auto ? angleCps() : visibleCps()).map(cp => { const r = evalCp(cp, a, f); return { id: cp.id, value: r.value == null ? null : Number(r.value.toFixed(2)), status: r.status }; });
-  const entry = { frame: f, time_sec: Math.round(f / fps() * 1000) / 1000, person: s + 1, note: note ?? $('note').value.trim(), auto, angle_mode: mode(),
-    angles: Object.fromEntries(KEYS.map(k => [k, roundMetric(k, a[k])])), checkpoints, image: `frames/f${String(f).padStart(6, '0')}${auto ? '-auto' : ''}.png`, blob };
+  const checkpoints = (auto ? angleCps() : tabCps()).map(cp => { const r = evalCp(cp, a, f); return { id: cp.id, value: r.value == null ? null : Number(r.value.toFixed(2)), status: r.status }; });
+  const entry = { frame: f, time_sec: Math.round(f / fps() * 1000) / 1000, person: s + 1, note: note ?? $('note').value.trim(), auto, angle_mode: mode(), angles: Object.fromEntries(KEYS.map(k => [k, roundMetric(k, a[k])])), checkpoints, image: `frames/f${String(f).padStart(6, '0')}${auto ? '-auto' : ''}.png`, blob };
   captures.push(entry);
   if (!auto) { $('note').value = ''; renderCaptures(); status(`프레임 ${f} 담음`); }
   return entry;
@@ -636,13 +942,19 @@ function renderCaptures() {
   $('caps').innerHTML = '';
   for (const c of captures) {
     const li = document.createElement('li'), img = new Image();
-    img.src = URL.createObjectURL(c.blob);
+    img.src = urlOf(c.blob);
     li.append(img, `프레임 ${c.frame} · ${c.person}번${c.note ? ' · ' + c.note : ''}`);
     $('caps').append(li);
   }
+  renderEvents(); // thumbnails come from the automatic captures
 }
 
 // ---- export ----
+$('dirChange').onclick = async e => {
+  e.preventDefault();
+  if (!window.showDirectoryPicker) return status('이 브라우저는 폴더 저장을 지원하지 않습니다. 내보내기는 파일 내려받기로 동작합니다.');
+  try { const h = await sessionsRoot(true); status(`저장 위치: ${h.name}`); } catch (err) { if (err.name !== 'AbortError') throw err; }
+};
 $('export').onclick = async () => {
   if (!video.duration) return status('먼저 영상을 여세요.');
   if (!series.size && !confirm('각도 데이터가 비어 있습니다. 전체 분석 없이 내보낼까요?')) return;
@@ -653,7 +965,7 @@ $('export').onclick = async () => {
   const meta = { video_name: videoName, label, fps: fps(), stride: analyzedStride, width: video.videoWidth, height: video.videoHeight,
     duration_sec: Math.round(video.duration * 1000) / 1000, frames_total: total(), created_at: now.toISOString(), mediapipe_version: MP_VERSION,
     checkpoints_version: cps?.version ?? null, handedness: hand(), angle_mode: analyzedMode || mode(), auto_detect: cps?.auto_detect ?? null,
-    court: calMeta() };
+    court: calMeta(), hr: hrData() };
   const files = [
     ['meta.json', JSON.stringify(meta, null, 2)],
     ['angles.csv', anglesCsv()],
@@ -664,7 +976,7 @@ $('export').onclick = async () => {
   ];
   if (window.showDirectoryPicker) {
     let root;
-    try { root = await showDirectoryPicker({ id: 'squash-sessions', mode: 'readwrite' }); }
+    try { root = await sessionsRoot(); }
     catch (e) { if (e.name === 'AbortError') return; throw e; }
     const out = await root.getDirectoryHandle(dir, { create: true });
     const frames = captures.length ? await out.getDirectoryHandle('frames', { create: true }) : null;
@@ -693,7 +1005,7 @@ function courtJson() {
     t_radius_m: st.o.t_radius_m, away_m: st.o.away_m, min_away_sec: st.o.min_away_sec,
     excursions: st.ex.map(e => ({ start_sec: r3(e.start_sec), far_sec: r3(e.far_sec), return_sec: r3(e.return_sec), duration_sec: r3(e.duration_sec), corner: e.corner, far_m: e.far_m.map(r2), far_dist_m: r2(e.far_dist_m) })),
     corner_avg: Object.fromEntries(CORNERS.map(c => [c, { n: st.avg[c].n, avg_sec: st.avg[c].n ? r3(st.avg[c].avg_sec) : null }])),
-    slowest_corner: st.slow, total_sec: st.total == null ? null : r3(st.total) };
+    slowest_corner: st.slow, total_sec: st.total == null ? null : r3(st.total), hr: hrData() };
 }
 // court_x,court_y in metres (2 decimals); empty without calibration or when the player is off court
 const courtCsv = a => { const m = cal && a.foot ? courtPos(cal.H, a.foot) : null; return m ? m[0].toFixed(2) + ',' + m[1].toFixed(2) : ','; };
@@ -706,6 +1018,98 @@ function anglesCsv() {
   }
   return rows.join('\n') + '\n';
 }
+
+// ---- 변화 기록: read every session folder, summarise, show table + trends ----
+const kneeTarget = () => cps?.checkpoints.find(c => c.id === 'lunge_front_knee')?.target;
+const histMsg = t => { $('histMsg').textContent = t; };
+async function readBundle(name, dh) {
+  const text = async f => { try { return await (await (await dh.getFileHandle(f)).getFile()).text(); } catch { return null; } };
+  const json = async f => { try { return JSON.parse(await text(f)); } catch { return null; } };
+  const meta = await json('meta.json');
+  if (!meta) return null; // not a session folder
+  const events = await json('events.json');
+  return { name, meta, events, court: await json('court.json'), csv: Array.isArray(events) ? null : await text('angles.csv') };
+}
+function showHistory(raws, where) {
+  hist = withDiffs(raws.map(r => summarizeSession(r, { auto_detect: cps?.auto_detect })), { kneeTarget: kneeTarget() });
+  histMsg(`${where}: 기록 ${hist.length}개를 불러왔습니다.`);
+  renderHist();
+}
+async function readFolder(h) {
+  const raws = [];
+  for await (const [name, e] of h.entries()) if (e.kind === 'directory') { const r = await readBundle(name, e); if (r) raws.push(r); }
+  $('histConnect').textContent = '다시 읽기';
+  showHistory(raws, h.name);
+}
+async function loadHistory() {
+  const can = !!window.showDirectoryPicker;
+  $('histPickWrap').hidden = can; $('histChange').hidden = !can;
+  if (!can) { $('histConnect').hidden = true; histMsg('이 브라우저는 폴더 연결을 지원하지 않습니다. [폴더 여러 파일 선택]으로 sessions 폴더를 고르세요.'); renderHist(); return; }
+  const h = await kvGet('dir');
+  if (!h) { $('histConnect').textContent = 'sessions 폴더 연결'; histMsg('아직 연결된 폴더가 없습니다.'); renderHist(); return; }
+  let granted = false; try { granted = (await h.queryPermission({ mode: 'readwrite' })) === 'granted'; } catch { /* ignore */ }
+  if (granted) await readFolder(h);
+  else { $('histConnect').textContent = `${h.name} 폴더 열기 허용`; histMsg('브라우저가 폴더 접근을 다시 확인합니다. 버튼을 눌러 허용해 주세요.'); renderHist(); }
+}
+$('histConnect').onclick = async () => {
+  try {
+    const h = await sessionsRoot(); // saved folder (asks permission) or a new pick
+    if (h) await readFolder(h); else histMsg('허용되지 않았습니다.');
+  } catch (e) { if (e.name !== 'AbortError') histMsg('폴더를 읽지 못했습니다: ' + e.message); }
+};
+$('histChange').onclick = async e => {
+  e.preventDefault();
+  try { const h = await sessionsRoot(true); await readFolder(h); } catch (err) { if (err.name !== 'AbortError') histMsg('폴더를 읽지 못했습니다: ' + err.message); }
+};
+// Fallback without showDirectoryPicker: the user picks the sessions folder as a whole (webkitdirectory).
+$('histFiles').onchange = async e => {
+  const groups = new Map();
+  for (const f of e.target.files) {
+    const parts = (f.webkitRelativePath || f.name).split('/'), key = parts.slice(0, -1).join('/');
+    if (!groups.has(key)) groups.set(key, { name: parts[parts.length - 2] || '', files: {} });
+    groups.get(key).files[parts[parts.length - 1]] = f;
+  }
+  const raws = [];
+  for (const g of groups.values()) {
+    const text = async n => g.files[n] ? g.files[n].text() : null, json = async n => { try { return JSON.parse(await text(n)); } catch { return null; } };
+    const meta = await json('meta.json'); if (!meta) continue;
+    const events = await json('events.json');
+    raws.push({ name: g.name, meta, events, court: await json('court.json'), csv: Array.isArray(events) ? null : await text('angles.csv') });
+  }
+  showHistory(raws, '선택한 폴더'); e.target.value = '';
+};
+const subOf = (s, k) => k === 'knee_min_avg' ? (s.n_events != null ? `굽힘 ${s.n_events}회` : '') : k === 'ghost_total' ? (s.ghost_visits != null && s.ghost_visits !== 18 ? `${s.ghost_visits}회 방문` : '')
+  : k === 'slow_corner' ? (s.slow_corner_name ? CORNER_LABEL[s.slow_corner_name] : '') : '';
+function renderHist() {
+  if (!hist.length) {
+    $('histTable').innerHTML = '<div class="sub">불러온 기록이 없습니다. 위의 버튼으로 sessions 폴더를 연결하면 날짜순 표와 지표별 변화가 나옵니다.</div>';
+    $('histCharts').innerHTML = ''; return;
+  }
+  const mark = d => d.tone === 'good' ? 'good' : d.tone === 'bad' ? 'bad' : 'none';
+  $('histTable').innerHTML = `<table class="ht"><thead><tr><th>날짜</th>${METRICS.map(m => `<th>${m.label}</th>`).join('')}</tr></thead><tbody>` +
+    hist.map(s => `<tr><td><div class="n">${esc(s.date || '-')}</div><div class="sub">${esc(s.label)}</div></td>` + s.diffs.map(d => {
+      const m = METRICS.find(x => x.key === d.key);
+      return d.value == null ? '<td class="none">기록 없음</td>'
+        : `<td><div class="n">${fmtValue(m, d.value)}</div>${subOf(s, d.key) ? `<div class="sub">${esc(subOf(s, d.key))}</div>` : ''}<div class="sub ${mark(d)}">${esc(d.text)}</div></td>`;
+    }).join('') + '</tr>').join('') + '</tbody></table>';
+  $('histCharts').innerHTML = METRICS.map(m => trend(m)).join('');
+}
+// Small line chart of one metric over the sessions (x = session order, gaps stay visible).
+function trend(m) {
+  const N = hist.length, pts = hist.map((s, i) => ({ i, v: s[m.key], tone: s.diffs.find(d => d.key === m.key).tone, date: s.date })).filter(p => p.v != null);
+  const head = `<div class="th"><b>${m.label}</b><span class="sub">${pts.length ? '최근 ' + fmtValue(m, pts[pts.length - 1].v) : '기록 없음'}</span></div>`;
+  if (!pts.length) return `<div class="trend">${head}<svg viewBox="0 0 300 110"><text x="150" y="60" fill="#9aa4b2" font-size="13" text-anchor="middle">기록 없음</text></svg></div>`;
+  const lo = Math.min(...pts.map(p => p.v)), hi = Math.max(...pts.map(p => p.v)), span = hi - lo || 1;
+  const X = i => N > 1 ? 34 + i / (N - 1) * 250 : 160, Y = v => hi === lo ? 55 : 90 - (v - lo) / span * 62;
+  const line = pts.length > 1 ? `<polyline points="${pts.map(p => `${X(p.i).toFixed(1)},${Y(p.v).toFixed(1)}`).join(' ')}" fill="none" stroke="#7d8fa8" stroke-width="2"/>` : '';
+  const dots = pts.map((p, k) => `<circle cx="${X(p.i).toFixed(1)}" cy="${Y(p.v).toFixed(1)}" r="${k === pts.length - 1 ? 5 : 3.5}" fill="${k === pts.length - 1 ? (p.tone === 'good' ? '#5fd38d' : p.tone === 'bad' ? '#ff6b6b' : '#e8ecf1') : '#7d8fa8'}"/>`).join('');
+  return `<div class="trend">${head}<svg viewBox="0 0 300 110">${line}${dots}` +
+    `<text x="4" y="${Y(hi) + 4}" fill="#9aa4b2" font-size="11">${hi.toFixed(m.dec)}</text><text x="4" y="${Y(lo) + 4}" fill="#9aa4b2" font-size="11">${lo.toFixed(m.dec)}</text>` +
+    `<text x="34" y="106" fill="#9aa4b2" font-size="10">${esc(hist[0].date || '')}</text><text x="284" y="106" fill="#9aa4b2" font-size="10" text-anchor="end">${esc(hist[N - 1].date || '')}</text></svg></div>`;
+}
+
+// ---- start ----
+setTab(TAB_NAME[loadSetting('tab', 'pose')] ? loadSetting('tab', 'pose') : 'pose');
 </script>
 </body>
 </html>
