@@ -60,8 +60,9 @@ export function createTracker() {
   };
 }
 
-export function drawSkeleton(ctx, W, H, lm, color, selected, connections) {
-  const lw = Math.max(4, H / 130) * (selected ? 1.3 : 1);
+// opt.thin = thinner lines (the opponent), opt.label = small tag above the head (e.g. 나).
+export function drawSkeleton(ctx, W, H, lm, color, selected, connections, opt = {}) {
+  const lw = Math.max(4, H / 130) * (selected ? 1.3 : 1) * (opt.thin ? 0.55 : 1);
   ctx.lineCap = 'round';
   ctx.globalAlpha = selected ? 1 : 0.75;
   for (const { start, end } of connections) {
@@ -72,6 +73,14 @@ export function drawSkeleton(ctx, W, H, lm, color, selected, connections) {
   ctx.fillStyle = '#fff';
   for (let i = 11; i < lm.length; i++) { ctx.beginPath(); ctx.arc(lm[i].x * W, lm[i].y * H, lw * 0.9, 0, 7); ctx.fill(); }
   ctx.globalAlpha = 1;
+  if (opt.label) {
+    const fs = Math.round(H / 28), x = lm[0].x * W, y = lm[0].y * H - fs * 1.4;
+    ctx.font = `700 ${fs}px "Segoe UI", "Apple SD Gothic Neo", sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const w = ctx.measureText(opt.label).width + fs * 0.7;
+    ctx.fillStyle = color; ctx.fillRect(x - w / 2, y - fs * 0.65, w, fs * 1.3);
+    ctx.fillStyle = '#000'; ctx.fillText(opt.label, x, y + 1);
+    ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+  }
 }
 
 // Knee label boxes: pure layout so L and R labels never overlap. items: [{bx, by (knee, px), cx (body centre x, px),

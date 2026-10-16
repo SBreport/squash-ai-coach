@@ -51,7 +51,7 @@
   #stage { position:relative; flex:none; height:45vh; min-height:220px; display:flex; align-items:center; justify-content:center; background:#000; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
   #stage.empty { border:2px dashed var(--line); }
   #stage.over { border-color:var(--dim); }
-  #stage.cal { cursor:crosshair; }
+  #stage.cal, #stage.pick { cursor:crosshair; }
   #stage:fullscreen { height:100vh; border:0; border-radius:0; }
   #vbox { position:relative; line-height:0; }
   #vbox video { width:100%; height:100%; display:block; }
@@ -65,7 +65,8 @@
   input.tl { width:100%; margin:0; padding:0; border:0; background:none; accent-color:var(--accent); cursor:pointer; }
   .ticks { position:absolute; left:0; right:0; top:0; height:8px; pointer-events:none; }
   .ticks i { position:absolute; top:0; width:3px; height:8px; margin-left:-1px; border-radius:1px; }
-  .ticks i.k { background:var(--accent); } .ticks i.v { background:#e67e22; } .ticks i.h { background:var(--p1); height:8px; }
+  .ticks i.k { background:var(--accent); } .ticks i.v { background:#e67e22; } .ticks i.h { background:var(--p1); height:8px; } .ticks i.o { background:var(--bad); }
+  canvas.band { display:block; width:calc(100% - 16px); height:8px; margin:3px 8px 0; border-radius:3px; cursor:pointer; background:#2a313b; }
   .tltime { white-space:nowrap; min-width:112px; text-align:right; } #tlHint { white-space:nowrap; }
   #fsBar { display:none; position:absolute; left:10px; right:10px; bottom:40px; z-index:2; background:rgba(0,0,0,.55); border-radius:6px; padding:2px 10px 4px; }
   #stage:fullscreen #fsBar { display:flex; }
@@ -147,6 +148,12 @@
   table.t .l { text-align:left; }
   table.t tr[data-f] { cursor:pointer; } table.t tr[data-f]:hover { background:#232a33; }
   #visits { max-height:210px; overflow-y:auto; }
+  #ovList { list-style:none; padding:0; margin:6px 0 0; max-height:260px; overflow-y:auto; }
+  #ovList li { display:flex; gap:6px; align-items:center; padding:4px 0; border-top:1px solid var(--line); }
+  #ovList img { width:64px; height:36px; object-fit:cover; border-radius:3px; background:#000; flex:none; }
+  #ovList .ph { width:64px; height:36px; border-radius:3px; background:#000; flex:none; }
+  #ovList .tm { flex:1; min-width:0; text-align:left; padding:2px 6px; }
+  #ovList button.sw { padding:2px 8px; font-size:12px; flex:none; } #ovList button.sw.on { border-color:var(--accent); color:var(--accent); font-weight:700; }
   #map2 { height:200px; width:auto; aspect-ratio:7.2 / 10.55; background:#f4efe4; border-radius:4px; cursor:pointer; flex:none; }
   .mrow { display:flex; gap:14px; align-items:flex-start; }
   .calRow { display:flex; gap:12px; align-items:flex-start; }
@@ -224,7 +231,7 @@
       <div><b>영상의 fps를 확인해 주세요.</b><div class="sub">아이폰 슬로모션은 보통 120, 일반은 30 또는 60입니다. 고르기 전에는 전체 분석을 할 수 없습니다.</div></div>
       <div class="qfps"><button data-fps="30">30</button><button data-fps="60">60</button><button data-fps="120">120</button><button data-fps="240">240</button></div>
     </div>
-    <div class="tlbar"><div class="tlwrap"><div class="ticks"></div><input type="range" class="tl" min="0" max="0" value="0" step="1" disabled aria-label="영상 시간 이동"></div><span class="tltime n sub">-</span><span id="tlHint" class="sub"></span></div>
+    <div class="tlbar"><div class="tlwrap"><div class="ticks"></div><input type="range" class="tl" min="0" max="0" value="0" step="1" disabled aria-label="영상 시간 이동"><canvas id="meBand" class="band" height="8" hidden title="초록 = 내가 잡힘, 회색 = 못 잡음, 빨강 = 두 사람이 겹침"></canvas></div><span class="tltime n sub">-</span><span id="tlHint" class="sub"></span></div>
     <div class="ctl">
       <button id="play">재생</button>
       <button data-step="-10">-10</button><button data-step="-1">-1</button><button data-step="1">+1</button><button data-step="10">+10</button>
@@ -278,9 +285,12 @@
       </div>
       <div class="sub" style="margin-top:6px">뒤에서 찍은 영상에서는 1~7번이 보입니다. 8~10은 보이면 찍으세요(정확도가 올라감).</div>
     </section>
-    <section class="card" data-tabs="game"><h2>분석할 사람</h2>
-      <label><input type="radio" name="person" value="0" checked> 1번 (하늘색)</label>&nbsp;&nbsp;<label><input type="radio" name="person" value="1"> 2번 (주황)</label>
-      <div class="sub" style="margin-top:4px">내 모습이 아닌 쪽이 선택돼 있으면 바꾸세요. T 점유율은 선택한 사람 기준입니다.</div></section>
+    <section class="card" data-tabs="game"><h2>나 고르기</h2>
+      <div class="row" style="margin-top:0"><button id="pickMe" class="primary">나 고르기</button></div>
+      <div id="meInfo" class="sub" style="margin-top:6px"></div></section>
+    <section class="card" data-tabs="game"><h2>겹침 구간 <span id="ovCount" class="sub"></span></h2>
+      <div class="sub">두 사람이 겹쳐서 누가 누구인지 헷갈릴 수 있는 곳입니다(슬라이드바의 빨간 눈금). 전후 장면을 보고 "나"가 바뀌었으면 [여기서부터 바꾸기]를 누르세요.</div>
+      <ul id="ovList"></ul></section>
     <section class="card" data-tabs="game"><h2>범실 기록</h2><div class="sub">2주차 추가 예정</div></section>
 
     <section class="card" data-tabs="steps"><h2>이동 지도</h2>
@@ -321,6 +331,7 @@ import { T, COURT_POINTS, CAL_ORDER, CAL_REQUIRED, CORNERS, CORNER_LABEL, calibr
 import { MP_VERSION, COLORS, MODE_LABEL, loadPose, toPeople, personAngles, createTracker,
   drawSkeleton, drawKnees, drawBadge, drawCheckpoints, loadSetting, saveSetting } from './pose.mjs';
 import { METRICS, summarizeSession, withDiffs, fmtValue, recoveryHr } from './history.mjs';
+import { personHist, assignTracks, findOverlaps, applySwaps, posDist, IDENTITY_DEFAULTS } from './identity.mjs';
 
 const $ = id => document.getElementById(id);
 const video = $('video'), overlay = $('overlay'), ctx = overlay.getContext('2d'), stage = $('stage'), vbox = $('vbox');
@@ -328,10 +339,12 @@ const video = $('video'), overlay = $('overlay'), ctx = overlay.getContext('2d')
 let landmarker = null, connections = [], lastTs = 0;
 const tracker = createTracker();
 let persons = [null, null];
-let series = new Map(), analyzedStride = null, analyzedMode = null, analyzing = false, cancelled = false;
+let series = new Map(), analyzedStride = null, analyzedMode = null, analyzing = false, cancelled = false; // series: frame -> [나, 상대] (derived from raw + ident)
+let raw = new Map();                    // frame -> the people found in that frame, unordered (angles, foot, hands, c = hip centre, hist = clothes colour)
+let seed = null, swaps = [], ident = null, meSlot = 0, pickMode = false; // 나 clicked {t, pt}; swaps = overlap end times the user flipped; ident = {fs, frames, base, res, overlaps, ...}
 let captures = [], videoName = '', videoUrl = null;
 let cps = null;
-let events = [], eventPerson = 0, probing = false, probeId = 0; // auto-detected knee-bend moments; fps probe state
+let events = [], probing = false, probeId = 0; // auto-detected knee-bend moments; fps probe state
 let fpsOk = false;                      // false until fps is auto-detected or chosen by the user (blocks the full analysis)
 let clicks = [], cal = null, calMode = false, savedCal = null; // court calibration (wizard: see the court section)
 let skipped = new Set(), calActs = [], calLimit = CAL_REQUIRED; // ids skipped as not visible; history for 되돌리기; steps in this round (7, or 10 after 더 찍기)
@@ -340,6 +353,8 @@ let hist = [];                          // 변화 기록: summaries with diffs
 const openSrc = new Set();              // checkpoint ids whose "근거 보기" is expanded
 const marks = new Map();                // frame -> {checkpointId: 'pass'|'fail'|'skip'} for type "visual"
 
+const thumbs = new Map();               // overlap thumbnails: 'b<ms>' / 'a<ms>' -> data URL (a second, hidden video so the shown one never moves)
+const tv = document.createElement('video'); tv.muted = true; tv.preload = 'auto';
 const ACCENT = '#ffd400';
 const TAB_NAME = { pose: '자세 조정', game: '게임 분석', steps: '스텝·체력', hist: '변화 기록' };
 // Checkpoint groups shown per tab. Lunge items (angle) are judged only in 자세 조정; the 무빙 group lives in 게임 분석.
@@ -349,7 +364,7 @@ const RECO = { twoShare: 0.25, farM: 2, farShare: 0.15 };
 const PLAIN = { ...LABELS, stance_ratio: '발 간격' };
 
 const fps = () => Number($('fps').value) || 60;
-const sel = () => Number(document.querySelector('input[name=person]:checked').value);
+const sel = () => 0; // slot 0 is always 나, slot 1 the opponent
 const hand = () => $('hand').value;
 const mode = () => $('mode').value;
 const tab = () => document.body.dataset.tab;
@@ -411,12 +426,12 @@ function openFile(file) {
   probeId++; probing = false; fpsOk = false; $('fpsAuto').hidden = true; $('fpsBanner').hidden = true; // drop a probe still running for the previous file
   videoName = file.name;
   $('label').value = file.name.replace(/\.[^.]+$/, ''); // always the new file's name
-  series = new Map(); analyzedStride = null; analyzedMode = null; captures = []; events = []; persons = [null, null]; tracker.reset(); marks.clear();
+  series = new Map(); raw = new Map(); ident = null; seed = null; swaps = []; meSlot = 0; pickMode = false; thumbs.clear(); analyzedStride = null; analyzedMode = null; captures = []; events = []; persons = [null, null]; tracker.reset(); marks.clear();
   clicks = []; cal = null; calMode = false; skipped = new Set(); calActs = []; calLimit = CAL_REQUIRED; savedCal = readSavedCal(file.name);
   hrLoad(); renderCaptures(); updateAnalyze(); refreshData();
   $('err').style.display = 'none';
   videoUrl = URL.createObjectURL(file);
-  video.src = videoUrl;
+  video.src = videoUrl; tv.src = videoUrl;
 }
 function showDecodeError() {
   vbox.hidden = true; $('hint').hidden = false; $('fsBtn').hidden = true; stage.classList.add('empty');
@@ -520,9 +535,14 @@ video.onpause = () => { $('play').textContent = '재생'; if (!analyzing && !pro
 
 // ---- pose ----
 function detect() {
+  const exact = storedPersons(0); // an analysed frame: the stored result is used as it is (no new detection; one-frame detection of small players often fails)
+  if (exact) return (persons = exact);
   if (!landmarker || video.readyState < 2) return persons;
   lastTs = Math.max(lastTs + 1, Math.round(performance.now())); // VIDEO mode needs increasing timestamps
-  persons = tracker.assign(toPeople(landmarker.detectForVideo(video, lastTs)));
+  const list = toPeople(landmarker.detectForVideo(video, lastTs)), slots = tracker.assign(list);
+  // after the analysis: the detected people take the roles of the nearest stored ones, or the stored people of the nearest analysed frame if nothing was detected;
+  // before: tracker slots (+ the slot the user picked)
+  persons = (ident && ((list.length && matchLive(list)) || storedPersons(analyzedStride || 1))) || (meSlot ? [slots[1], slots[0]] : slots);
   return persons;
 }
 
@@ -542,7 +562,8 @@ function render(force = false) {
     const right = !!p && (p.lm[23].x + p.lm[24].x) / 2 < 0.5;
     drawCheckpoints(ctx, W, H, `이번 주 체크 · 앞다리 ${front}`, rows.map(r => overlayRow(r)), right);
   }
-  persons.forEach((q, i) => q && ($('skel').value === 'all' || i === s) && drawSkeleton(ctx, W, H, q.lm, COLORS[i], i === s, connections));
+  const known = !!(seed || (ident && !ident.seedAuto)) && (!analyzing || !!ident);  // "나" is known: show the tag (not while the tracker order is still shown during the loop)
+  persons.forEach((q, i) => q && ($('skel').value === 'all' || i === s) && drawSkeleton(ctx, W, H, q.lm, COLORS[i], i === s, connections, { thin: i !== s, label: i === s && known ? '나' : null }));
   if (p) drawKnees(ctx, W, H, p.lm, COLORS[s], a);
   drawBadge(ctx, H, `각도: ${MODE_LABEL[mode()]}`);
   const t = video.currentTime || 0, m = Math.floor(t / 60);
@@ -637,7 +658,6 @@ $('skel').onchange = () => render();
 $('play').onclick = () => video.paused ? video.play() : video.pause();
 document.querySelectorAll('[data-step]').forEach(b => b.onclick = () => step(Number(b.dataset.step)));
 function step(n) { if (!video.duration || analyzing || probing) return; video.pause(); seekFrame(curFrame() + n); }
-document.querySelectorAll('input[name=person]').forEach(r => r.onchange = () => refreshData());
 $('chartKey').onchange = drawChart;
 $('hand').onchange = () => { saveSetting('hand', hand()); render(); };
 $('mode').onchange = () => { saveSetting('mode', mode()); render(); drawChart(); };
@@ -704,8 +724,9 @@ function renderTicks() {
   const k = events.map(e => `<i class="k" style="${left(e.time_sec)}" title="무릎 굽힘 #${e.n}"></i>`).join('');
   const v = cst.ex.map((e, i) => `<i class="v" style="${left(e.start_sec)}" title="고스팅 방문 ${i + 1} 시작"></i>`).join('');
   const h = cst.hu.map(x => `<i class="h" style="${left(x.start_sec)};width:max(3px, calc((100% - 16px) * ${(Math.max(0, x.end_sec - x.start_sec) / dur).toFixed(4)}))" title="만세 ${clock(x.start_sec)}~${clock(x.end_sec)}"></i>`).join('');
-  document.querySelectorAll('.ticks').forEach(el => { el.innerHTML = k + v + h; });
-  const kinds = [events.length && '노랑 무릎 굽힘', cst.ex.length && '주황 방문 시작', cst.hu.length && '파랑 만세'].filter(Boolean);
+  const ov = (ident?.overlaps || []).map(x => `<i class="o" style="${left(x.start_t)}" title="두 사람 겹침 ${clock(x.start_t)}~${clock(x.end_t)}"></i>`).join('');
+  document.querySelectorAll('.ticks').forEach(el => { el.innerHTML = k + v + h + ov; });
+  const kinds = [events.length && '노랑 무릎 굽힘', cst.ex.length && '주황 방문 시작', cst.hu.length && '파랑 만세', ident?.overlaps.length && '빨강 두 사람 겹침'].filter(Boolean);
   $('tlHint').textContent = kinds.length ? '눈금: ' + kinds.join(' · ') : '';
 }
 
@@ -728,38 +749,108 @@ $('analyze').onclick = async () => {
   if (!fpsOk) return status('영상의 fps를 먼저 골라 주세요.');
   const stride = Math.max(1, Number($('stride').value) || 2), n = total();
   analyzing = true; cancelled = false; video.pause(); updateAnalyze();
-  series = new Map(); tracker.reset(); analyzedStride = stride; analyzedMode = mode();
+  series = new Map(); raw = new Map(); ident = null; swaps = []; tracker.reset(); analyzedStride = stride; analyzedMode = mode();
   events = []; captures = captures.filter(c => !c.auto); renderEvents(); // a new analysis replaces the previous auto results
   $('prog').hidden = $('cancel').hidden = false; $('mode').disabled = true;
   for (let f = 0; f < n && !cancelled; f += stride) {
     await seekFrame(f);
     const ps = detect(); render();
-    series.set(f, ps.map(p => p ? { ...angles(p), foot: footPoint(p.lm, overlay.width, overlay.height), hands: handsUp(p.lm) } : null)); // foot: pixel point under the player (court mapping is derived later); hands: both wrists above the nose (start signal)
+    const img = ps.some(Boolean) ? frameImage() : null, es = ps.map(p => p ? entry(p, img) : null);
+    raw.set(f, es.filter(Boolean)); series.set(f, es); // raw: who is who is decided after the loop (buildIdentity); series is a provisional per-tracker-slot copy for the live chart
     $('prog').value = f / n;
     if (f % (stride * 10) === 0) drawChart();
   }
-  if (!cancelled) await autoDetect();
+  buildIdentity();
+  if (!cancelled) await autoDetect(tab() === 'pose'); // pictures of the knee-bend moments only in 자세 조정 (45 seeks + PNGs took over a minute)
   analyzing = false; updateAnalyze();
   $('prog').hidden = $('cancel').hidden = true; $('mode').disabled = false;
   status(`${cancelled ? '분석 취소됨' : '분석 완료'}: ${series.size}개 프레임 (${MODE_LABEL[analyzedMode]})${events.length ? ` · 무릎 굽힘 ${events.length}회 감지` : ''}`);
   renderCaptures();
   refreshData();
-  if (events.length) await seekFrame(events[0].frame);
+  if (events.length && tab() === 'pose') await seekFrame(events[0].frame);
 };
 
-// ---- auto detect: knee-bend moments (not claimed to be lunges or hits) of the selected person -> pose re-detected on that frame -> auto capture
-async function autoDetect() {
+// ---- who is 나: stored people per frame -> assignTracks (position + clothes colour) -> overlaps -> series ----
+const sampler = document.createElement('canvas'), sctx = sampler.getContext('2d', { willReadFrequently: true });
+// The current video frame at a small size (long side 320) for the clothes colour; null if the video is not ready.
+function frameImage() {
+  if (!video.videoWidth) return null;
+  const k = 320 / Math.max(video.videoWidth, video.videoHeight), w = Math.max(1, Math.round(video.videoWidth * k)), h = Math.max(1, Math.round(video.videoHeight * k));
+  sampler.width = w; sampler.height = h; sctx.drawImage(video, 0, 0, w, h);
+  return sctx.getImageData(0, 0, w, h);
+}
+const hipC = p => [(p.lm[23].x + p.lm[24].x) / 2, (p.lm[23].y + p.lm[24].y) / 2];
+// foot: pixel point under the player; hands: both wrists above the nose; c, hist: for who-is-who; lmc, wlc: the landmarks (packed) so the skeleton of an analysed frame can be shown without detecting again
+const entry = (p, img) => ({ ...angles(p), foot: footPoint(p.lm, overlay.width, overlay.height), hands: handsUp(p.lm), c: hipC(p), hist: img ? personHist(img, p.lm, 0.3) : null,
+  lmc: Float32Array.from(p.lm.flatMap(q => [q.x, q.y, q.z ?? 0, q.visibility ?? 1])), wlc: p.wl ? Float32Array.from(p.wl.flatMap(q => [q.x, q.y, q.z])) : null });
+const unpack = e => ({ lm: Array.from({ length: e.lmc.length / 4 }, (_, i) => ({ x: e.lmc[4 * i], y: e.lmc[4 * i + 1], z: e.lmc[4 * i + 2], visibility: e.lmc[4 * i + 3] })),
+  wl: e.wlc ? Array.from({ length: e.wlc.length / 3 }, (_, i) => ({ x: e.wlc[3 * i], y: e.wlc[3 * i + 1], z: e.wlc[3 * i + 2] })) : null });
+// 나 / opponent of the analysed frame nearest to the shown one (only if it is at most `maxGap` frames away), as {lm, wl}; null if none
+function storedPersons(maxGap) {
+  if (!ident) return null;
+  const f = curFrame(), i = nearestIdx(ident.fs, f);
+  if (Math.abs(ident.fs[i] - f) > maxGap) return null;
+  const rec = ident.frames[i].people, r = ident.res[i];
+  return [r.me, r.opp].map(k => k == null ? null : unpack(rec[k]));
+}
+const idOpts = () => ({ ...IDENTITY_DEFAULTS, ...cps?.identity, aspect: overlay.width / overlay.height });
+const nearestIdx = (arr, x) => { let lo = 0, hi = arr.length - 1; while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] < x) lo = m + 1; else hi = m; } return lo > 0 && Math.abs(arr[lo - 1] - x) <= Math.abs(arr[lo] - x) ? lo - 1 : lo; };
+// The frame and person to start from: the user's click; or, without one, the single player of a one-person video (automatic),
+// or any frame with two people apart (arbitrary: the user is asked to choose).
+function pickSeed(frames, o) {
+  const withPeople = frames.map((f, i) => f.people.length ? i : -1).filter(i => i >= 0);
+  if (!withPeople.length) return null;
+  if (seed) {
+    const i = withPeople[nearestIdx(withPeople.map(k => frames[k].t), seed.t)], ps = frames[i].people;
+    let idx = 0; ps.forEach((q, k) => { if (posDist(q.c, seed.pt, o.aspect) < posDist(ps[idx].c, seed.pt, o.aspect)) idx = k; });
+    return { t: frames[i].t, idx, auto: false };
+  }
+  const two = frames.filter(f => f.people.length >= 2).length / frames.length, single = two < o.two_share;
+  const good = single ? withPeople.filter(i => frames[i].people.length === 1) : withPeople.filter(i => frames[i].people.length === 2 && posDist(frames[i].people[0].c, frames[i].people[1].c, o.aspect) > 2 * o.overlap_dist);
+  const pool = good.length ? good : withPeople, i = pool[pool.length >> 1];
+  return { t: frames[i].t, idx: 0, auto: !single };
+}
+function buildIdentity() {
+  const fs = [...raw.keys()].sort((a, b) => a - b), frames = fs.map(f => ({ t: f / fps(), people: raw.get(f) }));
+  const o = idOpts(), sd = frames.length ? pickSeed(frames, o) : null;
+  if (!sd) { ident = null; series = new Map(); return; }
+  const base = assignTracks(frames, sd, o);
+  ident = { fs, frames, times: frames.map(f => f.t), base, overlaps: findOverlaps(frames, base, o), seedAuto: sd.auto, o };
+  applyIdentity();
+}
+function applyIdentity() {
+  ident.res = applySwaps(ident.frames, ident.base, ident.overlaps, swaps);
+  series = new Map(ident.fs.map((f, i) => [f, [ident.res[i].me, ident.res[i].opp].map(k => k == null ? null : ident.frames[i].people[k])]));
+}
+// Live view (the shown frame is not necessarily an analysed one): put each detected person on the role of the nearest stored
+// person of the closest analysed frame, by hip-centre distance. null if that frame is too far away or nothing is stored there.
+function matchLive(list) {
+  if (!ident || !list.length) return null;
+  const f = curFrame(), i = nearestIdx(ident.fs, f);
+  if (Math.abs(ident.fs[i] - f) > 3 * (analyzedStride || 1)) return null;
+  const rec = ident.frames[i].people, r = ident.res[i], at = k => k == null ? null : rec[k].c, ref = [at(r.me), at(r.opp)];
+  if (!ref[0] && !ref[1]) return null;
+  const cs = list.map(hipC), cost = (k, role) => k < 0 ? 0 : ref[role] ? posDist(cs[k], ref[role], ident.o.aspect) : 0.15;
+  const options = list.length >= 2 ? [[0, 1], [1, 0]] : [[0, -1], [-1, 0]];
+  const [a, b] = options.reduce((p, q) => cost(q[0], 0) + cost(q[1], 1) < cost(p[0], 0) + cost(p[1], 1) ? q : p);
+  return [list[a] || null, list[b] || null];
+}
+
+// ---- auto detect: knee-bend moments (not claimed to be lunges or hits) of 나 -> (shoot) pose re-detected on that frame -> auto capture
+// shoot = false: only the moments (chart dots, ticks, summary), no seek and no picture.
+async function autoDetect(shoot = true) {
   const P = cps?.auto_detect;
   if (!P) return status('checkpoints.json에 auto_detect가 없어 자동 감지를 건너뜁니다.');
   const s = sel(), frames = [...series.keys()].sort((a, b) => a - b);
   const found = detectEvents(frames.map(f => ({ frame: f, time: f / fps(), v: signalValue(P.signal, series.get(f)[s]) })), P);
-  eventPerson = s;
   for (const [i, e] of found.entries()) {
+    if (!shoot) {
+      const a = series.get(e.frame)[s], checkpoints = angleCps().map(cp => { const r = evalCp(cp, a, e.frame); return { id: cp.id, value: r.value == null ? null : Number(r.value.toFixed(2)), status: r.status }; });
+      events.push({ n: i + 1, frame: e.frame, time_sec: Math.round(e.frame / fps() * 1000) / 1000, front: a.front ?? null, angles: Object.fromEntries(KEYS.map(k => [k, roundMetric(k, a[k])])), checkpoints });
+      continue;
+    }
     status(`자동 감지 ${i + 1}/${found.length}: 프레임 ${e.frame}`);
-    await seekFrame(e.frame); tracker.reset(); detect();
-    // ponytail: with two players, keep the one whose signal matches the analysis value (no re-identification)
-    const gap = p => { const v = p && signalValue(P.signal, angles(p)); return v == null ? Infinity : Math.abs(v - e.value); };
-    if (gap(persons[1 - s]) < gap(persons[s])) persons = [persons[1], persons[0]];
+    await seekFrame(e.frame); tracker.reset(); detect(); // detect() puts 나 in slot 0 (matchLive)
     const a = angles(persons[s]), c = await capture({ auto: true, note: `자동 감지 #${i + 1}` });
     events.push({ n: i + 1, frame: c.frame, time_sec: c.time_sec, front: a.front ?? null, angles: c.angles, checkpoints: c.checkpoints });
   }
@@ -768,7 +859,8 @@ const blobUrls = new WeakMap();
 const urlOf = b => { if (!blobUrls.has(b)) blobUrls.set(b, URL.createObjectURL(b)); return blobUrls.get(b); };
 function renderEvents() {
   const n = events.length;
-  $('evHead').textContent = !series.size ? '전체 분석을 하면 자동으로 찾아서 담습니다.' : n ? `${eventPerson + 1}번 사람 · ${n}회 · 눌러서 그 장면으로 이동` : '감지된 지점이 없습니다.';
+  const shot = captures.some(c => c.auto);
+  $('evHead').textContent = !series.size ? '전체 분석을 하면 자동으로 찾아서 담습니다.' : n ? `내 몸 기준 · ${n}회 · 눌러서 그 장면으로 이동${shot ? '' : ' · 장면 사진은 자세 조정 탭에서 분석할 때만 담습니다'}` : '감지된 지점이 없습니다.';
   $('evList').innerHTML = events.map(e => {
     const k = signalValue('knee_min', e.angles), r = e.angles.stance_ratio, c = captures.find(x => x.auto && x.frame === e.frame);
     return `<li><button data-f="${e.frame}">${c ? `<img src="${urlOf(c.blob)}" alt="">` : ''}<span class="evt"><b class="n">#${e.n} · ${e.time_sec.toFixed(2)}초</b>` +
@@ -809,7 +901,7 @@ function drawChart() {
     const v = vals[i];
     if (v == null) { pen = false; return; }
     d += `${pen ? 'L' : 'M'}${cx(f).toFixed(1)},${cy(v).toFixed(1)}`; pen = true;
-    if (s === eventPerson && events.some(e => e.frame === f))
+    if (events.some(e => e.frame === f))
       dots += `<circle cx="${cx(f).toFixed(1)}" cy="${cy(v).toFixed(1)}" r="6" fill="${ACCENT}" stroke="#000" stroke-width="1.5"/>` +
         `<text x="${cx(f).toFixed(1)}" y="${(cy(v) - 10).toFixed(1)}" fill="${ACCENT}" font-size="14" font-weight="700" text-anchor="middle">${events.find(e => e.frame === f).n}</text>`;
   });
@@ -874,7 +966,7 @@ function resetCal() { skipped = new Set(); calActs = []; calLimit = CAL_REQUIRED
 $('calStart').onclick = () => {
   if (!video.duration) return status('먼저 영상을 여세요.');
   if (calMode) calMode = false;
-  else { if (clicks.length || skipped.size) resetCal(); calMode = true; video.pause(); }
+  else { if (clicks.length || skipped.size) resetCal(); calMode = true; pickMode = false; renderIdentity(); video.pause(); }
   renderCal(); render();
 };
 $('calMore').onclick = () => { calLimit = CAL_ORDER.length; calMode = true; video.pause(); renderCal(); render(); };
@@ -912,7 +1004,7 @@ function courtStats() {
 // Everything that depends on the analysis result, the court or the selected person. Not per video frame.
 function refreshData() {
   cst = courtStats(); courtTrackNow = cst.track;
-  renderSummary(); renderEvents(); renderCal(); renderMaps(); renderVisits(); renderHr(); renderReco(); renderTicks();
+  renderSummary(); renderEvents(); renderCal(); renderMaps(); renderVisits(); renderHr(); renderReco(); renderTicks(); renderIdentity(); drawBand();
   drawChart(); drawBars(); render();
 }
 
@@ -928,9 +1020,12 @@ function renderSummary() {
       stat('평균 발 간격', ss.length ? mean(ss).toFixed(2) + '배' : '-', '엉덩이 폭의 몇 배');
     note = has ? '' : '전체 분석을 누르면 채워집니다.';
   } else if (t === 'game') {
-    h = stat('T 점유율', ok ? st.occ.pct.toFixed(0) + '%' : '-', ok ? `위치가 잡힌 ${st.occ.valid}/${st.occ.total}개 중` : '');
+    const me = ident ? ident.res.filter(r => r.me != null).length : 0;
+    h = stat('T 점유율', ok ? st.occ.pct.toFixed(0) + '%' : '-', ok ? `위치가 잡힌 ${st.occ.valid}/${st.occ.total}개 중` : '') +
+      stat('내가 잡힌 비율', ident ? (me / ident.res.length * 100).toFixed(0) + '%' : '-', ident ? `${me}/${ident.res.length}장면` : '') +
+      stat('겹침 구간', ident ? ident.overlaps.length + '곳' : '-', ident ? '오른쪽 목록에서 확인' : '');
     note = !cal ? '아래에서 코트 맞추기를 먼저 하세요.' : !series.size ? '전체 분석을 하면 나옵니다.'
-      : ok ? `T에서 ${o.t_radius_m}m 안에 있던 시간의 비율입니다. 랠리 사이 쉬는 시간도 들어갑니다.` : '코트 안에서 잡힌 위치가 없습니다. 코트 맞춤을 확인하세요.';
+      : ok ? `나 기준입니다. T에서 ${o.t_radius_m}m 안에 있던 시간의 비율이고, 랠리 사이 쉬는 시간도 들어갑니다.` : '코트 안에서 잡힌 위치가 없습니다. 코트 맞춤을 확인하세요.';
   } else if (t === 'steps') {
     const n = st.ex.length, slow = st.slow;
     h = stat('고스팅 총시간', ok && st.total != null ? st.total.toFixed(1) + '초' : '-', st.start != null ? `시작: 만세 ${clock(st.start)}` + (st.end != null ? ` · 끝: 만세 ${clock(st.end)}` : '') : series.size ? '<span class="bad">시작 신호(만세) 못 찾음</span> · 첫 이탈~마지막 복귀' : '만세 끝~마지막 복귀') +
@@ -1015,6 +1110,113 @@ function drawBars() {
   }).join('');
 }
 
+// ---- 나 고르기, 겹침 구간 목록, 나 트랙 띠 ----
+const r3 = x => Math.round(x * 1000) / 1000;
+function renderIdentity() {
+  stage.classList.toggle('pick', pickMode);
+  $('pickMe').textContent = pickMode ? '취소' : seed ? '다시 고르기' : '나 고르기';
+  const me = ident ? ident.res.filter(r => r.me != null).length : 0;
+  let t;
+  if (pickMode) t = '<b>영상에서 내 몸을 클릭하세요.</b> 두 사람이 떨어져 있는 장면이 좋습니다.';
+  else if (ident && ident.seedAuto) t = '<b class="bad">아직 "나"를 고르지 않았습니다.</b> [나 고르기]를 누르고 영상에서 내 몸을 클릭하세요. 분석을 다시 하지 않아도 바로 바뀝니다.';
+  else if (ident && !seed) t = '한 사람만 나오는 영상이라 그 사람을 "나"로 정했습니다.';
+  else if (seed) t = `"나"를 ${clock(seed.t)} 장면에서 골랐습니다.` + (ident ? ` 분석한 장면의 ${(me / ident.res.length * 100).toFixed(0)}%에서 내가 잡혔고, 직접 바꾼 곳이 ${swaps.length}곳입니다.` : ' 전체 분석을 하면 이 사람을 따라갑니다.');
+  else t = '영상에서 [나 고르기]를 누르고 내 몸을 클릭하세요. 분석 전에 골라도, 분석 후에 골라도 됩니다. 한 사람만 나오는 영상은 고르지 않아도 됩니다.';
+  setHtml('meInfo', t);
+  const ov = ident?.overlaps || [];
+  $('ovCount').textContent = ident ? `${ov.length}곳` : '';
+  const d = (analyzedStride || 1) / fps(), sc = $('ovList').scrollTop;
+  setHtml('ovList', !ident ? '<li class="sub">전체 분석을 하면 나옵니다.</li>' : !ov.length ? '<li class="sub">겹친 구간이 없습니다.</li>'
+    : ov.map((x, i) => {
+      const on = swaps.some(w => Math.abs(w - x.end_t) < 1e-6), kb = 'b' + Math.round(Math.max(0, x.start_t - 0.5) * 1000), ka = 'a' + Math.round((x.end_t + 0.5) * 1000);
+      const im = k => thumbs.has(k) ? `<img src="${thumbs.get(k)}" alt="">` : `<span class="ph" data-th="${k}"></span>`;
+      return `<li data-i="${i}"><button class="tm" data-t="${r3(x.end_t + d)}"><span class="n">${clock(x.start_t)}</span><span class="sub"> ~ ${clock(x.end_t)}</span></button>${im(kb)}${im(ka)}` +
+        `<button class="sw ${on ? 'on' : ''}" data-sw="${r3(x.end_t)}">${on ? '바꿈 (되돌리기)' : '여기서부터 바꾸기'}</button></li>`;
+    }).join(''));
+  $('ovList').scrollTop = sc; watchThumbs();
+}
+// Thumbnails before / after each overlap come from the hidden second video, only for rows that are scrolled into view.
+let thumbObs = null, thumbBusy = false;
+const thumbQueue = [];
+function watchThumbs() {
+  if (!thumbObs) thumbObs = new IntersectionObserver(es => es.forEach(e => {
+    if (!e.isIntersecting) return;
+    thumbObs.unobserve(e.target);
+    e.target.querySelectorAll('[data-th]').forEach(el => { if (!thumbQueue.includes(el.dataset.th)) thumbQueue.push(el.dataset.th); });
+    drainThumbs();
+  }), { root: $('ovList') });
+  $('ovList').querySelectorAll('li[data-i]').forEach(li => { if (li.querySelector('[data-th]')) thumbObs.observe(li); });
+}
+async function drainThumbs() {
+  if (thumbBusy) return;
+  thumbBusy = true;
+  try {
+    while (thumbQueue.length) {
+      const k = thumbQueue.shift();
+      if (thumbs.has(k) || !tv.src) continue;
+      if (tv.readyState < 1) await new Promise(r => tv.addEventListener('loadedmetadata', r, { once: true }));
+      await new Promise(r => { tv.addEventListener('seeked', r, { once: true }); tv.currentTime = Math.min(Number(k.slice(1)) / 1000, Math.max(0, tv.duration - 0.05)); });
+      const c = document.createElement('canvas'); c.width = 128; c.height = Math.max(1, Math.round(128 * tv.videoHeight / tv.videoWidth));
+      c.getContext('2d').drawImage(tv, 0, 0, c.width, c.height);
+      const url = c.toDataURL('image/jpeg', 0.6); thumbs.set(k, url);
+      document.querySelectorAll(`[data-th="${k}"]`).forEach(el => { const im = new Image(); im.src = url; el.replaceWith(im); });
+    }
+  } finally { thumbBusy = false; }
+}
+$('ovList').onclick = e => {
+  const sw = e.target.closest('button[data-sw]'), tm = e.target.closest('button[data-t]');
+  if (sw) {
+    const sec = Number(sw.dataset.sw), i = swaps.findIndex(w => Math.abs(w - sec) < 1e-6);
+    if (i >= 0) swaps.splice(i, 1); else swaps.push(sec);
+    swaps.sort((a, b) => a - b); reassign(false);
+  } else if (tm) seekCourt(Math.round(Number(tm.dataset.t) * fps()));
+};
+// Pick 나: click a body on the video. The nearest person (to the click) gets the role; the position is stored so the analysis can be redone from it.
+$('pickMe').onclick = () => {
+  if (!video.duration) return status('먼저 영상을 여세요.');
+  pickMode = !pickMode; if (pickMode) { calMode = false; video.pause(); renderCal(); }
+  renderIdentity(); render();
+};
+stage.addEventListener('click', e => {
+  if (!pickMode || !video.duration || analyzing || probing || !e.target.closest('#vbox')) return;
+  const r = video.getBoundingClientRect(), nx = (e.clientX - r.left) / r.width, ny = (e.clientY - r.top) / r.height, asp = overlay.width / overlay.height;
+  let k = -1, bd = Infinity;
+  persons.forEach((p, i) => { if (p) for (const j of [0, 11, 12, 23, 24, 25, 26]) { const d = Math.hypot((p.lm[j].x - nx) * asp, p.lm[j].y - ny); if (d < bd) { bd = d; k = i; } } });
+  if (k < 0 || bd > 0.25) return status('이 장면에서 사람을 찾지 못했습니다. 사람 몸 위를 누르거나 다른 장면으로 옮겨 보세요.');
+  const o = idOpts();
+  if (persons[0] && persons[1] && posDist(hipC(persons[0]), hipC(persons[1]), o.aspect) < o.overlap_dist) return status('두 사람이 너무 가까이 있어 구분이 안 됩니다. 떨어져 있는 장면에서 다시 눌러 주세요.');
+  seed = { t: video.currentTime, pt: hipC(persons[k]) }; swaps = []; pickMode = false;
+  if (!ident && k === 1) meSlot = 1 - meSlot; // before the analysis the live view follows the tracker slots
+  status(`"나"를 골랐습니다 (${clock(seed.t)}).` + (ident ? ' 결과를 다시 계산합니다.' : ''));
+  if (ident) reassign(true); else { renderIdentity(); render(); }
+});
+// Who is 나 changed (new click or flipped overlap): redo the assignment without a new analysis. The knee-bend moments belong to 나,
+// so they are found again (without pictures; the old automatic pictures were of the previous person).
+async function reassign(newSeed) {
+  if (!raw.size || analyzing) return;
+  if (newSeed) buildIdentity(); else applyIdentity();
+  if (events.length) { events = []; captures = captures.filter(c => !c.auto); await autoDetect(false); renderCaptures(); }
+  if (landmarker && video.readyState >= 2) detect();
+  refreshData();
+}
+// Strip under the slider: green = 나 found, gray = not found, red = overlap. Click = go there.
+function drawBand() {
+  const cv = $('meBand'), on = !!ident && tab() !== 'hist';
+  cv.hidden = !on;
+  if (!on) return;
+  const W = cv.width = Math.max(1, cv.clientWidth), dur = video.duration || 1, g = cv.getContext('2d'), ov = ident.overlaps, lastT = ident.times[ident.times.length - 1], span = (analyzedStride || 1) / fps() * 1.5;
+  for (let x = 0; x < W; x++) {
+    const t = (x + 0.5) / W * dur, i = nearestIdx(ident.times, t);
+    g.fillStyle = Math.abs(ident.times[i] - t) > span && (t > lastT || t < ident.times[0]) ? '#2a313b' : ov.some(v => t >= v.start_t - span / 2 && t <= v.end_t + span / 2) ? '#ff5d5d' : ident.res[i].me != null ? '#3ddc84' : '#6b7482';
+    g.fillRect(x, 0, 1, cv.height);
+  }
+}
+$('meBand').onclick = e => {
+  const r = e.currentTarget.getBoundingClientRect();
+  seekCourt(Math.round((e.clientX - r.left) / r.width * video.duration * fps()));
+};
+new ResizeObserver(() => drawBand()).observe($('meBand'));
+
 // ---- recovery heart rate (스텝·체력): A right after the test, B one minute later ----
 const hrVal = id => { const v = $(id).value; return v === '' ? null : Number(v); };
 const hrData = () => ({ a: hrVal('hrA'), b: hrVal('hrB'), recovery: recoveryHr(hrVal('hrA'), hrVal('hrB')) });
@@ -1073,7 +1275,7 @@ $('export').onclick = async () => {
   const meta = { video_name: videoName, label, fps: fps(), stride: analyzedStride, width: video.videoWidth, height: video.videoHeight,
     duration_sec: Math.round(video.duration * 1000) / 1000, frames_total: total(), created_at: now.toISOString(), mediapipe_version: MP_VERSION,
     checkpoints_version: cps?.version ?? null, handedness: hand(), angle_mode: analyzedMode || mode(), auto_detect: cps?.auto_detect ?? null,
-    court: calMeta(), hr: hrData() };
+    court: calMeta(), hr: hrData(), identity: { seed: seed ? { t: r3(seed.t), pt: seed.pt.map(x => Math.round(x * 10000) / 10000) } : null, swaps, auto_seed: ident ? ident.seedAuto : null } };
   const files = [
     ['meta.json', JSON.stringify(meta, null, 2)],
     ['angles.csv', anglesCsv()],
