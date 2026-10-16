@@ -1,4 +1,6 @@
-# squash-ai-coach — SPEC v1.3 (MVP, due 2026-10-19)
+# squash-ai-coach — SPEC v1.4 (MVP, due 2026-10-19)
+
+v1.4: UI overhaul of `app/index.html` (section 1e): four tabs (자세 조정, 게임 분석, 스텝·체력, 변화 기록), no page scroll at 1440x900, summary card, `plain` text and range bars per checkpoint, fps fallback, remembered export folder, tab suggestion, fullscreen, `app/history.mjs`, `hr` in `meta.json`/`court.json`. Analysis logic unchanged. Where 1a/1c/1d describe the old side panel (group select, auto-detect list, calibration panel), 1e wins for layout.
 
 v1.3: slim on-video box (only `overlay_ids`, max 3 lines, section 1c), non-overlapping knee labels (`layoutLabels`), court calibration + T occupancy + movement map + ghosting excursion times (section 1d, `app/court.mjs`), `court.json`, `court_x,court_y` in `angles.csv`, `court` in `meta.json`.
 v1.2: one-pass workflow (open -> full analysis -> export). On-video checkpoint box, automatic knee-bend detection (section 1c), fps auto-detect and automatic stride, empty-bundle warning, label follows the file, `front` column in angles.csv, `events.json`, `data/` for local videos.
@@ -20,6 +22,7 @@ squash-ai-coach/
   app/pose.mjs         shared: pose loading, person tracking, drawing, settings, knee label layout
   app/court.mjs        court dimensions, homography, floor position, T occupancy, corner visits (pure; section 1d)
   app/angles.mjs       pure math: 2D/3D angles, racket/front-leg aliases, judge
+  app/history.mjs      session summary + change versus the previous record (pure; section 1e)
   app/checkpoints.json checkpoint definitions (schema in 1a)
   app/models/          pose model file (downloaded once, committed if license allows)
   docs/index.html      public dashboard (GitHub Pages serves /docs)
@@ -44,10 +47,10 @@ Features:
 4. "전체 분석" button: walk through the whole video with a stride (default every 2nd frame, configurable), detect pose, store per-frame angles. Progress bar + cancel. Then show a line chart (inline SVG or canvas, no library) of a chosen angle over time with a cursor synced to the current frame; click on chart seeks video.
 5. "이 프레임 담기" (key C): capture current frame + skeleton as PNG, with current angles and an optional one-line note.
 6. "분석 묶음 내보내기": write into a folder the user picks (File System Access API `showDirectoryPicker`, suggest `sessions/`), creating `<YYYY-MM-DD>-<label>/` with:
-   - `meta.json` {video_name, label, fps, stride, width, height, duration_sec, frames_total, created_at, mediapipe_version, checkpoints_version, handedness, angle_mode, auto_detect, court}. `auto_detect` = the parameter object from checkpoints.json used for this bundle. `court` = calibration object of section 1d or `null`. `angle_mode` is the mode of `angles.csv` (the mode of the last full analysis; current mode if none ran)
+   - `meta.json` {video_name, label, fps, stride, width, height, duration_sec, frames_total, created_at, mediapipe_version, checkpoints_version, handedness, angle_mode, auto_detect, court, hr}. `auto_detect` = the parameter object from checkpoints.json used for this bundle. `court` = calibration object of section 1d or `null`. `angle_mode` is the mode of `angles.csv` (the mode of the last full analysis; current mode if none ran)
    - `angles.csv` header: `frame,time_sec,person,knee_l,knee_r,hip_l,hip_r,elbow_l,elbow_r,trunk_lean,stance_ratio,front,court_x,court_y` (degrees 1 decimal; stance_ratio unitless 2 decimals; empty if not detected; `front` = front-leg decision per frame, `l`, `r` or empty; `court_x,court_y` = floor position in metres, 2 decimals, empty without calibration or when the player is more than 0.3 m outside the court)
    - `events.json` [{n, frame, time_sec, front, angles:{...}, checkpoints:[{id, value, status}]}] — the automatic detections of section 1c (`[]` if none)
-   - `court.json` see section 1d (calibration `null` and empty results if the court was not set)
+   - `court.json` see section 1d (calibration `null` and empty results if the court was not set); v1.4 adds `hr`
    - `captures.json` [{frame, time_sec, person, note, auto, angle_mode, angles:{...}, checkpoints:[{id, value, status}], image:"frames/f000342.png"}]. `status`: angle type `pass|fail|na|ref` (na = not measurable, ref = no target), visual type `pass|fail|skip|unset`
    - `frames/f000342.png` ...
    `auto: true` marks captures taken by automatic detection (image `frames/f000342-auto.png`). If no full analysis exists, export asks `각도 데이터가 비어 있습니다. 전체 분석 없이 내보낼까요?` first.
@@ -120,6 +123,34 @@ For each event: seek, reset tracker, re-detect the pose on that exact frame, jud
 
 **Export.** `meta.json.court` = `{points:[{name, px:[x,y], m:[x,y]}], H:[9 numbers, row-major, pixels -> metres], reproj_px}` or `null`. `court.json`: `{calibration (same object or null), person, t_occupancy_pct, t_radius_m, away_m, min_away_sec, excursions:[{start_sec, far_sec, return_sec, duration_sec, corner, far_m, far_dist_m}], corner_avg:{<corner>:{n, avg_sec}}, slowest_corner, total_sec}`.
 
+### 1e. v1.4 UI (layout, tabs, panel rules)
+
+**Layout at 1440x900, no page scroll** (`document.documentElement.scrollHeight <= innerHeight`, checked per tab): header (title, four tabs, status, mode chip, 파일 열기, 고급 설정, 단축키, 영상 비교 화면 link) + two columns 64% / 36%. Left: video box of fixed height 45vh (aspect ratio kept by `fit()`; the overlay canvas keeps the video pixel size and scales with the box), one control row (재생, -10 -1 +1 +10, frame/time text, fps chip, 장면 담기, 전체 분석, 내보내기), then the per-tab chart or map filling the remaining height with the video cursor synced. Right: panel (own scroll if long). Under 1100 px everything stacks and the page may scroll. Text roles: numbers (bold), body 14 px, sub (12 px gray); yellow is the single accent (active tab, event dots, slowest corner).
+
+**Tabs** (same video, same analysis; switching never re-analyses; the tab is remembered in `sqc_tab`):
+1. 자세 조정: chart = knee chart with event dots. Summary = knee-bend count, mean lowest knee, mean stance ratio (from the automatic events). Panel = 이번 주 체크 (`overlay_ids` angle items), list of knee-bend moments with thumbnails (reused auto-capture PNGs), 다른 체크 (other angle items of groups 런지/준비 자세/스윙).
+2. 게임 분석: movement map; summary = T occupancy with valid/total samples; panel = calibration steps, person select (1번/2번), 범실 기록 empty state ("2주차 추가 예정"), 무빙 group visual checks.
+3. 스텝·체력: bar chart of mean time per corner (slowest highlighted); summary = ghosting total, visits (warning if not 18), slowest corner; panel = calibration, small map, visit table (click = seek), recovery heart rate: inputs A (right after) and B (1 min later), recovery = A - B (`recoveryHr`), saved per video name in localStorage (`sqc_hr_<name>`), exported as `hr: {a, b, recovery}` in `meta.json` and `court.json` (nulls when empty).
+4. 변화 기록: replaces the video area, see below.
+
+**Checkpoint rule per tab**: groups shown = 자세 조정 {런지, 준비 자세, 스윙}, 게임 분석 {무빙}, 스텝·체력 none. So lunge angle items are judged and drawn on the video only in 자세 조정. Automatic captures always judge every angle item and always carry the 자세 조정 check box on the PNG (`render(true)`). Manual captures store the checkpoints of the current tab.
+
+**Item display**: status dot, `name`, one-line `plain` (new field in checkpoints.json, required by the check), for angle items a target range bar (green band = target, pin + number = my value; no bar for `target: null`, only the value and "기준선 비교"), small gray confidence, "근거 보기" link that expands channel, title, time (new-tab link) and the item note. For items with a target: "감지 N번 중 M번 통과" from the automatic events. Visual items live in the "눈으로 확인" fold (통과/미달/해당없음 buttons; opened by default in 게임 분석). Current-frame angles: 무릎 L, 무릎 R, 발 간격 always; hip, elbow, trunk in the "상세 각도" fold. "근거" fold lists every source of the tab's items.
+
+**고급 설정** (popover): fps, stride, 각도 2D/3D, 라켓 손, 뼈대 표시 (모든 사람 / 선택한 사람만), 영상 위 체크 표시, 묶음 이름, 저장 위치 바꾸기. The header keeps only the angle mode chip.
+
+**fps**: auto-detect as in 1c. On failure the full analysis is blocked (`fpsOk` false) and a large notice with quick buttons 30 / 60 / 120 / 240 appears; choosing one (or editing the fps field) sets fps and stride and unblocks.
+
+**Export folder**: the `showDirectoryPicker` handle is stored in IndexedDB (`sqc` / `kv` / `dir`); `requestPermission({mode:'readwrite'})` is called at every export or history load (user gesture). "저장 위치 바꾸기" re-picks. The same handle serves 변화 기록. Without the API exports fall back to downloads.
+
+**Tab suggestion** (text + button, never switches by itself, AI-set values): two persons in at least 25% of the analysed frames -> 게임 분석; else with a calibration and at least 15% of valid positions 2 m or more from T -> 스텝·체력; else 자세 조정. Shown only when it differs from the current tab.
+
+**Fullscreen**: button and `F` toggle the video stage (Fullscreen API), Esc returns. The skeleton, check box, frame info, arrow keys (Shift = 10), Space and C keep working. Shortcuts Space, arrows, Shift+arrows, C, F are listed in the header "단축키".
+
+**변화 기록 tab**: button "sessions 폴더 연결" (saved handle, permission asked again; fallback `<input webkitdirectory>` "폴더 여러 파일 선택"). Every sub folder with a `meta.json` is one record (`events.json`, `court.json`, `angles.csv` optional). Date-ordered table of six metrics with the change versus the previous record that has that metric (text like "+3.2°", "-1.5초", "첫 기록", "변화 없음", "기록 없음"; good = green, bad = red, no direction = gray) and one small trend chart per metric.
+
+`app/history.mjs` (pure): `summarizeSession({name, meta, events, court, csv}, {auto_detect})` -> `knee_min_avg` (mean of the smaller knee at the events), `stance_avg`, `t_occ`, `ghost_total` (only if visits exist), `slow_corner` (mean seconds of the slowest corner), `hr_recovery`, plus `n_events`, `ghost_visits`, `slow_corner_name`, `date`, `label`. Without `events.json` the events are computed from `angles.csv` (person 1) with `meta.auto_detect` or the current checkpoints.json values. `diffSessions(prev, cur, {kneeTarget})`: ghosting time and slowest-corner time lower is better; T occupancy and recovery HR higher is better; the knee is better when it gets closer to the lunge target range (`lunge_front_knee.target`, inside = distance 0); stance ratio has no direction. `withDiffs(list)` sorts by date and compares each metric with the nearest earlier session that has it. `recoveryHr(a, b)` = a - b, null if either is missing.
+
 ## 2. Dashboard (docs/index.html)
 
 Static page, vanilla JS, fetches `docs/data/*.json`. No libraries; charts are inline SVG. Light/dark via prefers-color-scheme. Works at phone width. Korean.
@@ -155,7 +186,7 @@ Seed: project.json as above; other files `[]`.
 
 ## 4. Check
 
-`tests/check.mjs` (node, `node:assert`): angle function on known triangles (90°, 180°, 45°), trunk lean on a vertical and a tilted segment, 3D angle/trunk lean, stance ratio, front/back leg decision, racket-hand alias mapping, `judge` (inside / outside / null target), `app/checkpoints.json` required keys (including `auto_detect`, `court`, and `overlay_ids`: 1 to 3 ids, all present in `checkpoints`, all angle items), `detectEvents` on the real `sessions/2026-10-16-IMG_1224/angles.csv` (must give the 7 frames above) and on synthetic valleys (0.7 s merge rule, shallow dip, spike), `fpsFromDeltas` (120/60/30 and others with jitter and dropped frames), `strideFor`, `layoutLabels` (no overlap, knee-outside placement, frame clamping), homography (square to unit square, interior points, 5-point least squares, collinear/too-few input gives null), `calibrate` + `courtPos` + `footPoint`, `cornerOf` boundaries, `detectExcursions` on a synthetic path (2 visits, short wobble and one-sample spike ignored), `tOccupancy`, and every docs/data/*.json parses and has the required keys. Must pass with `node tests/check.mjs`.
+`tests/check.mjs` (node, `node:assert`): angle function on known triangles (90°, 180°, 45°), trunk lean on a vertical and a tilted segment, 3D angle/trunk lean, stance ratio, front/back leg decision, racket-hand alias mapping, `judge` (inside / outside / null target), `app/checkpoints.json` required keys (including `auto_detect`, `court`, and `overlay_ids`: 1 to 3 ids, all present in `checkpoints`, all angle items), `detectEvents` on the real `sessions/2026-10-16-IMG_1224/angles.csv` (must give the 7 frames above) and on synthetic valleys (0.7 s merge rule, shallow dip, spike), `fpsFromDeltas` (120/60/30 and others with jitter and dropped frames), `strideFor`, `plain` text on every checkpoint, history (`summarizeSession` on the real `sessions/2026-10-16-IMG_1224/` bundle, `diffSessions` direction rules and missing data, `withDiffs`, `recoveryHr`), `layoutLabels` (no overlap, knee-outside placement, frame clamping), homography (square to unit square, interior points, 5-point least squares, collinear/too-few input gives null), `calibrate` + `courtPos` + `footPoint`, `cornerOf` boundaries, `detectExcursions` on a synthetic path (2 visits, short wobble and one-sample spike ignored), `tOccupancy`, and every docs/data/*.json parses and has the required keys. Must pass with `node tests/check.mjs`.
 
 ## Done means
 
