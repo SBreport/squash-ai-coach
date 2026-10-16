@@ -103,9 +103,9 @@ export function drawBadge(ctx, H, text) {
 // Checkpoint box under the badge (top-left) so screen recordings and saved PNGs show the verdicts.
 // rows: [{name, val, tgt, color}]; val is drawn bold in `color`, tgt (target text, may be '') dim after it.
 // Font size follows the short side so portrait clips do not get a giant box. Long names are cut with an ellipsis.
-export function drawCheckpoints(ctx, W, H, title, rows) {
+// right = draw in the top-right corner (used when the player stands on the left half).
+export function drawCheckpoints(ctx, W, H, title, rows, right = false) {
   const fs = Math.round(Math.min(W, H) / 34), pad = fs * 0.6, lh = fs * 1.55, dot = fs * 0.45;
-  const x0 = H / 30 * 0.35, y0 = H / 30 * 2.4;
   const font = (bold) => `${bold ? 700 : 400} ${fs}px "Segoe UI", sans-serif`;
   ctx.textBaseline = 'middle';
   const w = (t, bold) => { ctx.font = font(bold); return ctx.measureText(t).width; };
@@ -114,6 +114,7 @@ export function drawCheckpoints(ctx, W, H, title, rows) {
   const nameW = Math.max(w(title, true) - dot * 3, ...names.map(n => w(n, true)));
   const valW = Math.max(0, ...rows.map(r => w(r.val, true) + (r.tgt ? w(' / ' + r.tgt, false) : 0)));
   const boxW = pad * 2 + dot * 3 + nameW + fs + valW, boxH = pad * 2 + lh * (rows.length + 1);
+  const m = H / 30 * 0.35, x0 = right ? W - boxW - m : m, y0 = H / 30 * 2.4;
   ctx.fillStyle = 'rgba(0,0,0,.62)'; ctx.fillRect(x0, y0, boxW, boxH);
   ctx.fillStyle = '#ffd400'; ctx.font = font(true); ctx.fillText(title, x0 + pad, y0 + pad + lh / 2);
   rows.forEach((r, i) => {

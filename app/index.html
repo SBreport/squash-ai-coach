@@ -293,7 +293,9 @@ function render() {
   const rows = cpRows(a, video.duration ? curFrame() : 0);
   if (rows.length && $('showCp').checked) {
     const g = $('cpGroup').value || '전체', front = a.front === 'l' ? 'L' : a.front === 'r' ? 'R' : '?';
-    drawCheckpoints(ctx, W, H, `체크포인트 · ${g} · 앞다리 ${front}`, rows.map(r => overlayRow(r)));
+    // ponytail: box goes to the half the player is not in (hip midpoint); a two-player game can still overlap
+    const right = !!p && (p.lm[23].x + p.lm[24].x) / 2 < 0.5;
+    drawCheckpoints(ctx, W, H, `체크포인트 · ${g} · 앞다리 ${front}`, rows.map(r => overlayRow(r)), right);
   }
   persons.forEach((q, i) => q && drawSkeleton(ctx, W, H, q.lm, COLORS[i], i === s, connections));
   if (p) for (const k of ['knee_l', 'knee_r']) drawKnee(ctx, W, H, p.lm, k, COLORS[s], a[k]);
