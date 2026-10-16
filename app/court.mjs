@@ -153,14 +153,15 @@ export function tOccupancy(track, radius) {
 export const CORNERS = ['front_left', 'front_right', 'side_left', 'side_right', 'back_left', 'back_right'];
 export const CORNER_LABEL = { front_left: '앞 왼쪽', front_right: '앞 오른쪽', side_left: '옆 왼쪽', side_right: '옆 오른쪽', back_left: '뒤 왼쪽', back_right: '뒤 오른쪽' };
 
-// Which of 6 ghosting zones a court point is in: nearest touch row by depth. Typical touch depths (AI-set, not a
-// coach number): front corner ~1.0 m, side touch at the side wall ~short line (5.44), back corner ~8.75 m. Splitting at
-// the midpoints keeps a side touch made just in front of the short line out of "front". Left = x < 3.20 (T line = right).
-// ponytail: fixed depths; tune ROW_SPLIT if real ghosting footage puts touches elsewhere.
-const TOUCH_FRONT = 1.0, TOUCH_BACK = 8.75; // typical touch depths of the front and back corners (m from the front wall)
-const ROW_SPLIT = [(TOUCH_FRONT + COURT.shortLine) / 2, (COURT.shortLine + TOUCH_BACK) / 2]; // 3.22, 7.10
+// Which of 6 ghosting zones a court point is in, by DIRECTION from T: more than SIDE_DEG forward of sideways = front,
+// more than SIDE_DEG behind = back, else side. Depth bands failed on real footage (IMG_1222, 2026-10-16): side touches
+// that stop short of the wall and drift a little forward were called "front". Left = x < 3.20 (T line counts as right).
+// ponytail: fixed 30 deg (AI-set, not a coach number); tune if real touches land between rows.
+const TOUCH_FRONT = 1.0, TOUCH_BACK = 8.75; // typical touch depths of the front and back corners (m from the front wall), guide picture
+const SIDE_DEG = 30;
 export function cornerOf(p) {
-  const row = p[1] < ROW_SPLIT[0] ? 'front' : p[1] < ROW_SPLIT[1] ? 'side' : 'back';
+  const deg = Math.atan2(COURT.tY - p[1], Math.abs(p[0] - COURT.tX)) * 180 / Math.PI;
+  const row = deg > SIDE_DEG ? 'front' : deg < -SIDE_DEG ? 'back' : 'side';
   return `${row}_${p[0] < COURT.tX ? 'left' : 'right'}`;
 }
 

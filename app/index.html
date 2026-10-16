@@ -836,7 +836,7 @@ new ResizeObserver(() => { if (tab() === 'pose') drawChart(); else if (tab() ===
 // ---- court: calibration (click floor marks -> homography), T occupancy, corner visits ----
 // The pixel point under the player is stored per analysed frame (series[..].foot); court metres are derived from the
 // calibration whenever needed, so the court can be set before or after the full analysis.
-const courtCfg = () => ({ t_radius_m: 1, away_m: 1.5, min_away_sec: 0.3, hands_up_min_sec: 0.3, ...cps?.court });
+const courtCfg = () => ({ t_radius_m: 1, away_m: 1.5, min_away_sec: 0.3, hands_up_min_sec: 0.3, hands_up_knee_min: 150, ...cps?.court });
 const readSavedCal = name => { try { return JSON.parse(loadSetting('court_' + name, 'null')); } catch { return null; } };
 function setClicks(list, save = true) {
   clicks = list; cal = list.length >= 4 ? calibrate(list) : null;
@@ -899,10 +899,14 @@ stage.addEventListener('click', e => {
 function courtStats() {
   const s = sel(), o = courtCfg(), frames = [...series.keys()].sort((a, b) => a - b);
   const track = cal && series.size ? frames.map(f => ({ frame: f, t: f / fps(), p: courtPos(cal.H, series.get(f)[s]?.foot) })) : [];
-  // Start signal: the first hands-up span of the selected person; its END (arms come down) is the test start. Visits are counted after it.
-  const hu = detectHandsUp(frames.map(f => ({ t: f / fps(), up: series.get(f)[s]?.hands ?? null })), o), start = hu.length ? hu[0].end_sec : null;
-  const ex = detectExcursions(start == null ? track : track.filter(q => q.t >= start), T, o), avg = cornerAvg(ex);
-  return { track, o, occ: tOccupancy(track, o.t_radius_m), ex, avg, slow: slowestCorner(avg), hu, start,
+  // Signals: hands up while standing straight (both knees >= hands_up_knee_min). The knee check drops deep front-corner lunges,
+  // where the head drops below the wrists (IMG_1222 9 s was read as a hands-up). First span END = test start; a later span's
+  // START = test end (the player raises the arms again at T after the last lap). Visits are counted between the two.
+  const up = a => a?.hands == null ? null : a.hands && a.knee_l >= o.hands_up_knee_min && a.knee_r >= o.hands_up_knee_min;
+  const hu = detectHandsUp(frames.map(f => ({ t: f / fps(), up: up(series.get(f)[s]) })), o);
+  const start = hu.length ? hu[0].end_sec : null, end = hu.length > 1 ? hu[hu.length - 1].start_sec : null;
+  const ex = detectExcursions(track.filter(q => (start == null || q.t >= start) && (end == null || q.t <= end)), T, o), avg = cornerAvg(ex);
+  return { track, o, occ: tOccupancy(track, o.t_radius_m), ex, avg, slow: slowestCorner(avg), hu, start, end,
     total: start != null && ex.length ? ex[ex.length - 1].return_sec - start : totalSec(ex) };
 }
 // Everything that depends on the analysis result, the court or the selected person. Not per video frame.
@@ -929,7 +933,7 @@ function renderSummary() {
       : ok ? `T에서 ${o.t_radius_m}m 안에 있던 시간의 비율입니다. 랠리 사이 쉬는 시간도 들어갑니다.` : '코트 안에서 잡힌 위치가 없습니다. 코트 맞춤을 확인하세요.';
   } else if (t === 'steps') {
     const n = st.ex.length, slow = st.slow;
-    h = stat('고스팅 총시간', ok && st.total != null ? st.total.toFixed(1) + '초' : '-', st.start != null ? `시작: 만세 ${clock(st.start)}` : series.size ? '<span class="bad">시작 신호(만세) 못 찾음</span> · 첫 이탈~마지막 복귀' : '만세 끝~마지막 복귀') +
+    h = stat('고스팅 총시간', ok && st.total != null ? st.total.toFixed(1) + '초' : '-', st.start != null ? `시작: 만세 ${clock(st.start)}` + (st.end != null ? ` · 끝: 만세 ${clock(st.end)}` : '') : series.size ? '<span class="bad">시작 신호(만세) 못 찾음</span> · 첫 이탈~마지막 복귀' : '만세 끝~마지막 복귀') +
       stat('방문', ok ? n + '회' : '-', ok ? (n === 18 ? '6코너 x 3바퀴' : `<span class="bad">18회가 아님 (${n}회 감지)</span>`) : '') +
       stat('가장 느린 코너', slow ? CORNER_LABEL[slow] : '-', slow ? st.avg[slow].avg_sec.toFixed(2) + '초' : '', 'hl');
     note = !cal ? '아래에서 코트 맞추기를 먼저 하세요.' : !series.size ? '전체 분석을 하면 나옵니다.' : ok ? '' : '코트 안에서 잡힌 위치가 없습니다. 코트 맞춤을 확인하세요.';
@@ -996,7 +1000,7 @@ function drawBars() {
     const msg = !cal ? '코트를 맞추고 전체 분석을 하면 코너별 시간이 막대로 나옵니다.' : !series.size ? '전체 분석을 하면 코너별 시간이 막대로 나옵니다.' : '코너 방문이 감지되지 않았습니다.';
     setHtml('ghostSvg', ghostGuideSvg(st.o.t_radius_m));
     setHtml('ghostText', '<b>고스팅 테스트 순서</b><p style="margin:6px 0">T에서 출발해 번호 순서로 코너를 라켓으로 찍고 매번 T로 돌아옵니다. 3바퀴(18회).</p>' +
-      `<div class="sub">${CORNERS.map((c, i) => `${i + 1} ${CORNER_LABEL[c]}`).join(' → ')}</div><div class="sub" style="margin-top:6px">시작 신호: T에서 두 팔을 번쩍 들었다가 내리면 그때부터 시간을 잽니다(만세).</div><div class="sub" style="margin-top:8px">${msg}</div>`);
+      `<div class="sub">${CORNERS.map((c, i) => `${i + 1} ${CORNER_LABEL[c]}`).join(' → ')}</div><div class="sub" style="margin-top:6px">시작 신호: T에서 두 팔을 번쩍 들었다가 내리면 그때부터 시간을 잽니다(만세). 끝나고 T에서 한 번 더 만세를 하면 그 뒤 움직임은 빼고 셉니다.</div><div class="sub" style="margin-top:8px">${msg}</div>`);
     return;
   }
   const H = fitBox(svg, 220);
@@ -1109,7 +1113,7 @@ function courtJson() {
     t_radius_m: st.o.t_radius_m, away_m: st.o.away_m, min_away_sec: st.o.min_away_sec, hands_up_min_sec: st.o.hands_up_min_sec,
     excursions: st.ex.map(e => ({ start_sec: r3(e.start_sec), far_sec: r3(e.far_sec), return_sec: r3(e.return_sec), duration_sec: r3(e.duration_sec), corner: e.corner, far_m: e.far_m.map(r2), far_dist_m: r2(e.far_dist_m) })),
     corner_avg: Object.fromEntries(CORNERS.map(c => [c, { n: st.avg[c].n, avg_sec: st.avg[c].n ? r3(st.avg[c].avg_sec) : null }])),
-    slowest_corner: st.slow, total_sec: st.total == null ? null : r3(st.total), start_signal: st.start == null ? null : { type: 'hands_up', sec: r3(st.start) }, hr: hrData() };
+    slowest_corner: st.slow, total_sec: st.total == null ? null : r3(st.total), start_signal: st.start == null ? null : { type: 'hands_up', sec: r3(st.start) }, end_signal: st.end == null ? null : { type: 'hands_up', sec: r3(st.end) }, hr: hrData() };
 }
 // court_x,court_y in metres (2 decimals); empty without calibration or when the player is off court
 const courtCsv = a => { const m = cal && a.foot ? courtPos(cal.H, a.foot) : null; return m ? m[0].toFixed(2) + ',' + m[1].toFixed(2) : ','; };

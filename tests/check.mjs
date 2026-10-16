@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { KEYS, angle, trunkLean, poseAngles, angle3, trunkLean3, poseAngles3, stanceRatio, frontSide, resolveMetric, checkpointValue, judge,
   detectEvents, medianSmooth, signalValue, fpsFromDeltas, strideFor } from '../app/angles.mjs';
-import { layoutLabels } from '../app/pose.mjs';
+import { layoutLabels, createTracker } from '../app/pose.mjs';
 import { METRICS, summarizeSession, diffSessions, withDiffs, recoveryHr } from '../app/history.mjs';
 import { COURT, T, COURT_POINTS, CAL_ORDER, CAL_REQUIRED, calGuideSvg, ghostGuideSvg, courtSvg, CORNERS, homography, applyH, invertH, calibrate, footPoint, courtPos, tOccupancy,
   cornerOf, detectExcursions, cornerAvg, slowestCorner, totalSec, handsUp, detectHandsUp } from '../app/court.mjs';
@@ -161,7 +161,7 @@ for (const id of cpFile.overlay_ids) {
 }
 const CF = cpFile.court;
 assert.ok(CF, 'checkpoints.json: court missing');
-for (const k of ['t_radius_m', 'away_m', 'min_away_sec', 'hands_up_min_sec']) assert.ok(typeof CF[k] === 'number' && CF[k] > 0, `court.${k}`);
+for (const k of ['t_radius_m', 'away_m', 'min_away_sec', 'hands_up_min_sec', 'hands_up_knee_min']) assert.ok(typeof CF[k] === 'number' && CF[k] > 0, `court.${k}`);
 assert.ok(CF.away_m > CF.t_radius_m, 'court.away_m must be larger than t_radius_m');
 assert.ok(/AI/.test(CF.note), 'court.note must say these are AI-set values');
 
@@ -248,13 +248,14 @@ assert.deepEqual(CAL_ORDER.slice(7), ['back_left', 'back_right', 'half_back']);
 // ---- corners, T occupancy, excursions ----
 assert.deepEqual(CORNERS.length, 6);
 assert.equal(cornerOf([1, 1]), 'front_left');
-assert.equal(cornerOf([5, 3.21]), 'front_right');
+assert.equal(cornerOf([5.6, 4.6]), 'side_right'); // IMG_1222: side touch short of the wall, drifting forward
+assert.equal(cornerOf([4.5, 3.5]), 'front_right'); // 53 deg forward of sideways
 assert.equal(cornerOf([5, 5.2]), 'side_right');   // side touch just in front of the short line
 assert.equal(cornerOf([3.19, 1]), 'front_left');
 assert.equal(cornerOf([3.2, 1]), 'front_right'); // the T line counts as right
-assert.equal(cornerOf([1, 3.22]), 'side_left');  // midpoint front/side row = side
-assert.equal(cornerOf([1, 7.09]), 'side_left');
-assert.equal(cornerOf([1, 7.1]), 'back_left');   // midpoint side/back row = back
+assert.equal(cornerOf([1, 4.3]), 'side_left');   // 27 deg forward = side
+assert.equal(cornerOf([1, 6.6]), 'side_left');   // 28 deg back = side
+assert.equal(cornerOf([1, 7.5]), 'back_left');   // 43 deg back = back
 assert.equal(cornerOf([6, 6.2]), 'side_right');
 assert.equal(cornerOf([6, 9.7]), 'back_right');
 near(T[0], COURT.width / 2); near(T[1], 5.44);
@@ -405,4 +406,16 @@ const project = JSON.parse(readFileSync(new URL('project.json', dir), 'utf8'));
 assert.equal(project.metrics.length, 5);
 for (const m of project.metrics) for (const k of ['id', 'name', 'unit', 'better']) assert.ok(k in m, `metric missing ${k}`);
 
+
+// ---- person tracker: a few false second detections must not steal the lone player ----
+{
+  const P = x => { const lm = []; lm[23] = { x, y: 0.5 }; lm[24] = { x, y: 0.5 }; return { lm }; };
+  const tr = createTracker(), slot = r => r[0] ? 0 : 1;
+  for (let i = 0; i < 50; i++) tr.assign([P(0.3)]);                 // one player, slot 1
+  tr.assign([P(0.3), P(0.8)]); tr.assign([P(0.3), P(0.8)]);         // 2 frames of a false second person at 0.8
+  assert.equal(slot(tr.assign([P(0.75)])), 0, 'lone player after a gap stays in slot 1 even near the stale slot 2');
+  const g = createTracker();                                         // real game: both players established
+  for (let i = 0; i < 50; i++) g.assign([P(0.3), P(0.8)]);
+  assert.equal(slot(g.assign([P(0.78)])), 1, 'game: lone detection near player 2 goes to slot 2');
+}
 console.log(`check.mjs: ok (angles 2D/3D, checkpoints, auto detect, fps, overlay labels, court homography/wizard order/T/excursions, history/diff/recovery HR, ${files.length} data files)`);

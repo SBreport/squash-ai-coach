@@ -34,20 +34,26 @@ export function personAngles(p, mode, W, H) {
 // Keep person 1/2 stable across frames: match by hip center to the previous frame.
 // ponytail: nearest-center matching only; breaks when players cross. Add re-id if that matters.
 export function createTracker() {
-  let prev = null;
+  let prev = null, seen = [0, 0];
   const center = o => ({ x: (o.lm[23].x + o.lm[24].x) / 2, y: (o.lm[23].y + o.lm[24].y) / 2 });
   const d = (a, b) => (a && b) ? Math.hypot(a.x - b.x, a.y - b.y) : 0;
   return {
-    reset() { prev = null; },
+    reset() { prev = null; seen = [0, 0]; },
     assign(list) {
       let out = [list[0] || null, list[1] || null];
       if (prev) {
         const c = out.map(o => o && center(o));
         const keep = d(c[0], prev[0]) + d(c[1], prev[1]);
         const swap = d(c[0], prev[1]) + d(c[1], prev[0]);
-        if (list.length === 1 && prev[1] && (!prev[0] || d(c[0], prev[1]) < d(c[0], prev[0]))) out = [null, out[0]];
+        // A lone detection only moves to slot 2 if slot 2 is an established person. A few false second detections
+        // (glass reflection, a split skeleton) used to leave a stale slot 2 that captured the real player after an
+        // occlusion gap: 1-person ghosting video lost 7 of 18 visits (2026-10-16, IMG_1222).
+        // ponytail: fixed 20% share; a real game where one player is rarely visible would need a smarter rule.
+        const est = seen[1] >= 0.2 * seen[0];
+        if (list.length === 1 && prev[1] && est && (!prev[0] || d(c[0], prev[1]) < d(c[0], prev[0]))) out = [null, out[0]];
         else if (list.length === 2 && swap < keep) out = [out[1], out[0]];
       }
+      out.forEach((o, i) => { if (o) seen[i]++; });
       prev = out.map((o, i) => o ? center(o) : prev?.[i] || null);
       return out;
     },
