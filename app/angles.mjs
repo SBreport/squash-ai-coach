@@ -130,3 +130,81 @@ export function judge(value, target) {
   if (!target) return 'ref';
   return value >= (target.min ?? -Infinity) && value <= (target.max ?? Infinity) ? 'pass' : 'fail';
 }
+
+// ---- auto detect (knee-bend moments) ----
+
+// Median filter over `vals` (null stays null; nulls inside the window are ignored). k = odd window size.
+export function medianSmooth(vals, k = 5) {
+  const h = k >> 1;
+  return vals.map((v, i) => {
+    if (v == null) return null;
+    const w = vals.slice(Math.max(0, i - h), i + h + 1).filter(x => x != null).sort((a, b) => a - b);
+    return w[w.length >> 1];
+  });
+}
+
+// Linear-interpolated percentile of an ascending array.
+const percentile = (asc, p) => {
+  const x = (asc.length - 1) * p / 100, i = Math.floor(x);
+  return asc[i] + (asc[Math.min(i + 1, asc.length - 1)] - asc[i]) * (x - i);
+};
+
+// samples: [{frame, time, v}] sorted by frame (v = signal in degrees or null). Finds knee-bend moments by a RELATIVE
+// rule (absolute thresholds fail: this footage never goes below ~139 deg in 2D): median-smooth, baseline = pct of the
+// smoothed values, keep samples that are the minimum within +-window and at least min_drop below the baseline, then
+// of events closer than min_gap_sec keep only the lower one. Returns [{frame, time, value}] by frame.
+export function detectEvents(samples, o) {
+  const sm = medianSmooth(samples.map(s => s.v), o.smooth);
+  const ok = sm.filter(v => v != null).sort((a, b) => a - b);
+  if (!ok.length) return [];
+  const base = percentile(ok, o.baseline_pct);
+  const dts = samples.slice(1).map((s, i) => s.time - samples[i].time).filter(d => d > 0).sort((a, b) => a - b);
+  const w = Math.max(1, Math.round(o.window_sec / (dts[dts.length >> 1] || 1)));
+  const cand = [];
+  sm.forEach((v, i) => {
+    if (v == null || v > base - o.min_drop) return;
+    for (let j = Math.max(0, i - w); j <= Math.min(sm.length - 1, i + w); j++) if (sm[j] != null && sm[j] < v) return;
+    cand.push(i);
+  });
+  const kept = [];
+  for (const i of cand.sort((a, b) => sm[a] - sm[b] || a - b))
+    if (kept.every(j => Math.abs(samples[i].time - samples[j].time) >= o.min_gap_sec - 1e-9)) kept.push(i);
+  return kept.sort((a, b) => a - b).map(i => ({ frame: samples[i].frame, time: samples[i].time, value: sm[i] }));
+}
+
+// The signal detectEvents runs on. knee_min = the more bent knee (min of the two), null if neither was measured.
+export function signalValue(name, a) {
+  if (name !== 'knee_min') throw new Error('unknown signal ' + name);
+  const v = [a?.knee_l, a?.knee_r].filter(x => x != null);
+  return v.length ? Math.min(...v) : null;
+}
+
+// ---- fps ----
+
+export const COMMON_FPS = [24, 25, 30, 48, 50, 60, 120, 240];
+
+// Frame-time gaps (seconds, from requestVideoFrameCallback mediaTime) -> fps snapped to a common value, or null if
+// the gaps are too few / too scattered to trust. Takes the most common gap (5%-wide log bins, neighbours merged so
+// noise on a bin edge does not split the vote), then the median inside it, so a few dropped frames (2x gaps) and
+// timer noise do not matter. Why gaps and not "frames per second of playback": a 120 fps clip played at 1x on a
+// 60 Hz screen skips frames, so counting presented frames reads ~60. Slow playback (0.25x) shows every frame.
+export function fpsFromDeltas(deltas) {
+  const d = deltas.filter(x => x > 0 && Number.isFinite(x));
+  if (d.length < 5) return null;
+  const bin = x => Math.round(Math.log(x) / Math.log(1.05));
+  const count = new Map();
+  for (const x of d) count.set(bin(x), (count.get(bin(x)) || 0) + 1);
+  let best = 0, bc = 0;
+  for (const b of count.keys()) {
+    const c = (count.get(b - 1) || 0) + count.get(b) + (count.get(b + 1) || 0);
+    if (c > bc) { bc = c; best = b; }
+  }
+  if (bc < d.length / 2) return null;
+  const near = d.filter(x => Math.abs(bin(x) - best) <= 1).sort((a, b) => a - b);
+  const fps = 1 / near[near.length >> 1];
+  const snap = COMMON_FPS.reduce((p, c) => Math.abs(c - fps) < Math.abs(p - fps) ? c : p);
+  return Math.abs(snap - fps) / snap <= 0.05 ? snap : Math.round(fps);
+}
+
+// Full-analysis step: about 30 samples per second of video.
+export const strideFor = fps => Math.max(1, Math.round(fps / 30));

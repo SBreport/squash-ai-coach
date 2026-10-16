@@ -1,0 +1,15 @@
+{
+  "video_name": "IMG_1224.mov",
+  "label": "IMG_1224",
+  "fps": 120,
+  "stride": 4,
+  "width": 1280,
+  "height": 720,
+  "duration_sec": 12.223,
+  "frames_total": 1466,
+  "created_at": "2026-10-16T09:21:11.126Z",
+  "mediapipe_version": "1.1.0",
+  "checkpoints_version": "v1.1",
+  "handedness": "R",
+  "angle_mode": "2d"
+}

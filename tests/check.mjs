@@ -1,7 +1,8 @@
 // node tests/check.mjs
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { KEYS, angle, trunkLean, poseAngles, angle3, trunkLean3, poseAngles3, stanceRatio, frontSide, resolveMetric, checkpointValue, judge } from '../app/angles.mjs';
+import { KEYS, angle, trunkLean, poseAngles, angle3, trunkLean3, poseAngles3, stanceRatio, frontSide, resolveMetric, checkpointValue, judge,
+  detectEvents, medianSmooth, signalValue, fpsFromDeltas, strideFor } from '../app/angles.mjs';
 
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
 
@@ -102,6 +103,51 @@ for (const c of cpFile.checkpoints) {
   if (c.type === 'angle') for (const h of ['R', 'L']) for (const f of ['l', 'r']) assert.ok(KEYS.includes(resolveMetric(c.metric, h, f)), `${c.id}: unknown metric ${c.metric}`);
 }
 
+// ---- auto detect ----
+assert.deepEqual(medianSmooth([1, 1, 9, 1, 1], 5), [1, 1, 1, 1, 1]); // one-sample spike removed
+assert.deepEqual(medianSmooth([1, null, 3], 3), [1, null, 3]); // null stays null, nulls in the window are ignored
+assert.equal(signalValue('knee_min', { knee_l: 140, knee_r: 120 }), 120);
+assert.equal(signalValue('knee_min', { knee_l: 140, knee_r: null }), 140);
+assert.equal(signalValue('knee_min', {}), null);
+const AD = cpFile.auto_detect;
+assert.ok(AD, 'checkpoints.json: auto_detect missing');
+for (const k of ['smooth', 'baseline_pct', 'min_drop', 'window_sec', 'min_gap_sec']) assert.equal(typeof AD[k], 'number', `auto_detect.${k}`);
+assert.equal(AD.signal, 'knee_min');
+assert.ok(/AI/.test(AD.note), 'auto_detect.note must say these are AI-set values');
+
+// real footage (first session, 120 fps, stride 4): exactly these 7 knee-bend moments
+const csv = readFileSync(new URL('../sessions/2026-10-16-IMG_1224/angles.csv', import.meta.url), 'utf8').trim().split('\n');
+const head = csv[0].split(','), col = n => head.indexOf(n), num = x => x === '' ? null : Number(x);
+const real = csv.slice(1).map(l => l.split(',')).filter(r => r[col('person')] === '1')
+  .map(r => ({ frame: +r[col('frame')], time: +r[col('time_sec')], v: signalValue(AD.signal, { knee_l: num(r[col('knee_l')]), knee_r: num(r[col('knee_r')]) }) }));
+assert.deepEqual(detectEvents(real, AD).map(e => e.frame), [64, 308, 732, 848, 960, 1124, 1320]);
+
+// synthetic: 0.05 s per sample, flat 170. Smooth valleys at samples 20 (130) and 30 (140) are 0.5 s apart -> only the lower one;
+// the valley at 60 (135) is far away -> kept; a dip to 162 (drop 8 < 15) and a one-sample spike down to 100 -> ignored.
+// Median smoothing can shift a valley bottom by a sample, so frames are compared within one sample (4 frames).
+const syn = Array.from({ length: 100 }, (_, i) => ({ frame: i * 4, time: i * 0.05, v: 170 }));
+const valley = (c, bottom) => { for (let d = -4; d <= 4; d++) syn[c + d].v = Math.min(170, bottom + 2 * d * d); };
+valley(20, 130); valley(30, 140); valley(60, 135); valley(80, 162); syn[90].v = 100;
+const O = { signal: 'knee_min', smooth: 5, baseline_pct: 90, min_drop: 15, window_sec: 0.33, min_gap_sec: 0.7 };
+const close = (got, want) => assert.ok(got.length === want.length && got.every((f, i) => Math.abs(f - want[i]) <= 4), `${got} vs ${want}`);
+close(detectEvents(syn, O).map(e => e.frame), [80, 240]);
+close(detectEvents(syn, { ...O, min_gap_sec: 0.3 }).map(e => e.frame), [80, 120, 240]); // gap shorter than 0.5 s: both kept
+assert.deepEqual(detectEvents(syn.map(s => ({ ...s, v: null })), O), []);
+assert.deepEqual(detectEvents([], O), []);
+
+// ---- fps from frame-time gaps ----
+const gaps = (fps, n = 40) => Array.from({ length: n }, (_, i) => (1 / fps) * (1 + 0.015 * Math.sin(i * 12.9898))); // up to 1.5% jitter
+const withDrops = d => d.map((x, i) => i % 11 === 5 ? x * 2 : x); // some dropped frames (double gaps)
+for (const f of [24, 25, 30, 48, 50, 60, 120, 240]) assert.equal(fpsFromDeltas(withDrops(gaps(f))), f, `fps ${f}`);
+assert.equal(fpsFromDeltas(gaps(59.94)), 60);
+assert.equal(fpsFromDeltas(gaps(119.88)), 120);
+assert.equal(fpsFromDeltas(gaps(100)), 100); // not a common value: rounded, not snapped
+assert.equal(fpsFromDeltas([0.01, 0.01]), null); // too few
+assert.equal(fpsFromDeltas(Array.from({ length: 30 }, (_, i) => 0.005 * 1.3 ** (i % 10))), null); // scattered
+assert.equal(fpsFromDeltas([]), null);
+// ---- stride ----
+assert.deepEqual([24, 30, 60, 120, 240, 1].map(strideFor), [1, 1, 2, 4, 8, 1]);
+
 const dir = new URL('../docs/data/', import.meta.url);
 const need = {
   'project.json': ['title', 'question', 'start_date', 'tournament_date', 'rule', 'youtube_playlist', 'metrics'],
@@ -123,4 +169,4 @@ const project = JSON.parse(readFileSync(new URL('project.json', dir), 'utf8'));
 assert.equal(project.metrics.length, 5);
 for (const m of project.metrics) for (const k of ['id', 'name', 'unit', 'better']) assert.ok(k in m, `metric missing ${k}`);
 
-console.log(`check.mjs: ok (angles 2D/3D, checkpoints, ${files.length} data files)`);
+console.log(`check.mjs: ok (angles 2D/3D, checkpoints, auto detect, fps, ${files.length} data files)`);

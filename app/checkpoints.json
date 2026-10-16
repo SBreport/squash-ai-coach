@@ -1,4 +1,7 @@
-{"version":"v1.1","handedness_default":"R","checkpoints":[
+{"version":"v1.2","handedness_default":"R",
+ "auto_detect":{"signal":"knee_min","smooth":5,"baseline_pct":90,"min_drop":15,"window_sec":0.33,"min_gap_sec":0.7,
+  "note":"무릎 굽힘 순간 자동 감지 매개변수. 전부 AI 설정값이며 코치 수치가 아님. 무릎 각도(두 무릎 중 더 굽은 쪽)를 중앙값 5개로 평활 -> 기준선 = 평활값의 90퍼센타일 -> 앞뒤 window_sec(약 10샘플) 안의 최솟값이면서 기준선보다 min_drop(도) 이상 낮은 점 -> min_gap_sec 안에서 겹치면 더 낮은 쪽만. 절대 기준(예: 130도 이하)은 쓰지 않음: 첫 실제 영상에서 2D 무릎이 최저 139~160도라 감지가 0이 됨. 첫 실제 영상(IMG_1224, 120fps, 간격 4프레임) 기준으로 맞춘 값."},
+ "checkpoints":[
  {"id":"lunge_front_knee","group":"런지","name":"런지 앞무릎 약 90도","type":"angle",
   "metric":"knee_front","target":{"min":75,"max":105},"view":"back_diagonal","confidence":"중",
   "note":"코치 기준은 '90도'이며 '매우 가변적'이라는 단서 있음. 허용폭 ±15도는 AI 설정(코치 수치 아님). 런지로 들어간 샷에만 적용(두 발 베이스 접촉은 제외). 앞다리 = 앞벽 쪽 발(포핸드 왼발이 앞일 수 있음).",
