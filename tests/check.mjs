@@ -5,8 +5,8 @@ import { KEYS, angle, trunkLean, poseAngles, angle3, trunkLean3, poseAngles3, st
   detectEvents, medianSmooth, signalValue, fpsFromDeltas, strideFor } from '../app/angles.mjs';
 import { layoutLabels } from '../app/pose.mjs';
 import { METRICS, summarizeSession, diffSessions, withDiffs, recoveryHr } from '../app/history.mjs';
-import { COURT, T, COURT_POINTS, CORNERS, homography, applyH, invertH, calibrate, footPoint, courtPos, tOccupancy,
-  cornerOf, detectExcursions, cornerAvg, slowestCorner, totalSec } from '../app/court.mjs';
+import { COURT, T, COURT_POINTS, CAL_ORDER, CAL_REQUIRED, calGuideSvg, ghostGuideSvg, courtSvg, CORNERS, homography, applyH, invertH, calibrate, footPoint, courtPos, tOccupancy,
+  cornerOf, detectExcursions, cornerAvg, slowestCorner, totalSec, handsUp, detectHandsUp } from '../app/court.mjs';
 
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
 
@@ -161,7 +161,7 @@ for (const id of cpFile.overlay_ids) {
 }
 const CF = cpFile.court;
 assert.ok(CF, 'checkpoints.json: court missing');
-for (const k of ['t_radius_m', 'away_m', 'min_away_sec']) assert.ok(typeof CF[k] === 'number' && CF[k] > 0, `court.${k}`);
+for (const k of ['t_radius_m', 'away_m', 'min_away_sec', 'hands_up_min_sec']) assert.ok(typeof CF[k] === 'number' && CF[k] > 0, `court.${k}`);
 assert.ok(CF.away_m > CF.t_radius_m, 'court.away_m must be larger than t_radius_m');
 assert.ok(/AI/.test(CF.note), 'court.note must say these are AI-set values');
 
@@ -226,6 +226,25 @@ const toPx = m => applyH(H0, m);
   assert.equal(footPoint(f.map(q => ({ ...q, visibility: 0 })), 1000, 1000), null);
 }
 
+// ---- calibration wizard order and the two guide pictures ----
+assert.deepEqual([...CAL_ORDER].sort(), COURT_POINTS.map(p => p.id).sort(), 'CAL_ORDER = exactly the COURT_POINTS ids');
+assert.equal(CAL_ORDER.length, 10); assert.equal(CAL_REQUIRED, 7);
+assert.deepEqual(CAL_ORDER.slice(0, 7), ['t', 'short_left', 'short_right', 'box_left', 'box_right', 'front_left', 'front_right']); // numbers 1-7 as sent to the user
+assert.deepEqual(CAL_ORDER.slice(7), ['back_left', 'back_right', 'half_back']);
+{
+  const g = calGuideSvg(1, { done: new Set(['t']), skipped: new Set(['short_left']), current: 'short_right' });
+  assert.ok(g.includes('<animate'), 'current mark pulses');
+  assert.equal((g.match(/<animate/g) || []).length, 1);
+  assert.equal((g.match(/<path d="M/g) || []).length, 1, 'one check mark for the one done mark');
+  for (const n of [2, 3, 4, 5, 6, 7, 8, 9, 10]) assert.ok(g.includes(`>${n}</text>`), `number ${n} drawn`); // 1 is replaced by the check
+  assert.ok(!calGuideSvg(1).includes('<animate'), 'no current mark, no pulse');
+  assert.ok(calGuideSvg(1).includes('>1</text>'));
+  const gh = ghostGuideSvg(1);
+  for (const n of [1, 2, 3, 4, 5, 6]) assert.ok(gh.includes(`>${n}</text>`), `ghost number ${n}`);
+  assert.equal((gh.match(/stroke-dasharray/g) || []).length, 6, 'one dashed line T -> corner each');
+  assert.ok(courtSvg(1).includes('앞벽') && gh.includes(courtSvg(1, .55)), 'both guides reuse the shared court drawing');
+}
+
 // ---- corners, T occupancy, excursions ----
 assert.deepEqual(CORNERS.length, 6);
 assert.equal(cornerOf([1, 1]), 'front_left');
@@ -280,6 +299,27 @@ near(T[0], COURT.width / 2); near(T[1], 5.44);
   const occ = tOccupancy([...Array(20).fill({ t: 0, p: [tx + 0.5, ty] }), ...Array(10).fill({ t: 0, p: [tx, ty + 3] }), ...Array(5).fill({ t: 0, p: null })], 1.0);
   near(occ.pct, 20 / 30 * 100); assert.deepEqual([occ.inside, occ.valid, occ.total], [20, 30, 35]);
   assert.equal(tOccupancy([], 1).pct, null);
+}
+
+// ---- start signal: hands up ----
+{
+  const lmk = (nose, lw, rw, vis = 1) => { const a = Array.from({ length: 33 }, () => ({ x: .5, y: .5, visibility: vis })); a[0].y = nose; a[15].y = lw; a[16].y = rw; return a; };
+  assert.equal(handsUp(lmk(.4, .2, .3)), true);
+  assert.equal(handsUp(lmk(.4, .2, .5)), false);   // only one hand up
+  assert.equal(handsUp(lmk(.4, .6, .6)), false);
+  assert.equal(handsUp(lmk(.4, .2, .3, 0.2)), null); // not visible
+  const O = { hands_up_min_sec: 0.3 }, at = (t0, t1, up) => { const o = []; for (let t = t0; t < t1 - 1e-9; t += 1 / 30) o.push({ t: Math.round(t * 1000) / 1000, up }); return o; };
+  // 2 s down, 0.5 s up, 1 s down, a 0.1 s blip, 2 s down, 1 s up (track ends)
+  const sm = [...at(0, 2, false), ...at(2, 2.5, true), ...at(2.5, 3.5, false), ...at(3.5, 3.6, true), ...at(3.6, 5.6, false), ...at(5.6, 6.6, true)];
+  const hu = detectHandsUp(sm, O);
+  assert.equal(hu.length, 2);
+  assert.ok(Math.abs(hu[0].start_sec - 2) < 1e-6 && Math.abs(hu[0].end_sec - 2.5) < 1e-6, JSON.stringify(hu[0])); // end = first frame with arms down
+  assert.ok(hu[1].start_sec > 5.5 && hu[1].end_sec > hu[1].start_sec + 0.9, 'span that runs to the end of the track is kept');
+  // undetected samples neither end nor start a span
+  const holes = [...at(0, 1, false), ...at(1, 1.2, true), ...at(1.2, 1.4, null), ...at(1.4, 1.7, true), ...at(1.7, 2.5, false)];
+  assert.equal(detectHandsUp(holes, O).length, 1);
+  assert.deepEqual(detectHandsUp([], O), []);
+  assert.deepEqual(detectHandsUp(at(0, 3, false), O), []);
 }
 
 // ---- plain-language text of every checkpoint (shown in the panel) ----
@@ -365,4 +405,4 @@ const project = JSON.parse(readFileSync(new URL('project.json', dir), 'utf8'));
 assert.equal(project.metrics.length, 5);
 for (const m of project.metrics) for (const k of ['id', 'name', 'unit', 'better']) assert.ok(k in m, `metric missing ${k}`);
 
-console.log(`check.mjs: ok (angles 2D/3D, checkpoints, auto detect, fps, overlay labels, court homography/T/excursions, history/diff/recovery HR, ${files.length} data files)`);
+console.log(`check.mjs: ok (angles 2D/3D, checkpoints, auto detect, fps, overlay labels, court homography/wizard order/T/excursions, history/diff/recovery HR, ${files.length} data files)`);

@@ -60,6 +60,15 @@
   #fsBtn { position:absolute; top:8px; right:8px; z-index:2; background:rgba(0,0,0,.6); padding:3px 10px; font-size:12px; }
   #fsInfo { display:none; position:absolute; left:10px; bottom:8px; background:rgba(0,0,0,.6); border-radius:4px; padding:2px 8px; font-size:14px; line-height:1.4; }
   #stage:fullscreen #fsInfo { display:block; }
+  .tlbar { flex:none; display:flex; align-items:center; gap:10px; }
+  .tlwrap { position:relative; flex:1; padding-top:9px; }
+  input.tl { width:100%; margin:0; padding:0; border:0; background:none; accent-color:var(--accent); cursor:pointer; }
+  .ticks { position:absolute; left:0; right:0; top:0; height:8px; pointer-events:none; }
+  .ticks i { position:absolute; top:0; width:3px; height:8px; margin-left:-1px; border-radius:1px; }
+  .ticks i.k { background:var(--accent); } .ticks i.v { background:#e67e22; } .ticks i.h { background:var(--p1); height:8px; }
+  .tltime { white-space:nowrap; min-width:112px; text-align:right; } #tlHint { white-space:nowrap; }
+  #fsBar { display:none; position:absolute; left:10px; right:10px; bottom:40px; z-index:2; background:rgba(0,0,0,.55); border-radius:6px; padding:2px 10px 4px; }
+  #stage:fullscreen #fsBar { display:flex; }
   #err { display:none; padding:10px 14px; background:#3a1d1d; border:1px solid #a33; border-radius:6px; }
   #err pre { background:#000; padding:8px; user-select:all; white-space:pre-wrap; margin:6px 0 0; }
   #fpsBanner { display:flex; gap:16px; align-items:center; justify-content:space-between; padding:10px 14px; background:#3a1d1d; border:1px solid #a33; border-radius:8px; }
@@ -140,6 +149,12 @@
   #visits { max-height:210px; overflow-y:auto; }
   #map2 { height:200px; width:auto; aspect-ratio:7.2 / 10.55; background:#f4efe4; border-radius:4px; cursor:pointer; flex:none; }
   .mrow { display:flex; gap:14px; align-items:flex-start; }
+  .calRow { display:flex; gap:12px; align-items:flex-start; }
+  /* the two guide pictures use viewBox -1.05 -1.05 8.5 12.1 (room for the big dots at the walls) */
+  #calDiag, #ghostSvg { height:260px; width:auto; aspect-ratio:8.5 / 12.1; background:#f4efe4; border-radius:4px; flex:none; }
+  #ghostSvg { height:100%; cursor:default; }
+  .calSide { flex:1; min-width:0; }
+  .calSide .row:first-of-type { margin-top:10px; }
 
   /* history view */
   #histView { flex:1; min-height:0; display:none; flex-direction:column; gap:10px; padding:10px 16px 12px; }
@@ -201,6 +216,7 @@
       <div id="hint">영상 파일을 여기로 끌어다 놓거나, 위의 [파일 열기]를 누르세요.<br>열면 앱이 fps를 알아서 재고 자세 뼈대를 그려 줍니다.</div>
       <div id="vbox" hidden><video id="video" playsinline muted></video><canvas id="overlay"></canvas></div>
       <div id="fsInfo"></div>
+      <div id="fsBar" class="tlbar"><div class="tlwrap"><div class="ticks"></div><input type="range" class="tl" min="0" max="0" value="0" step="1" disabled aria-label="영상 시간 이동"></div><span class="tltime n sub">-</span></div>
       <button id="fsBtn" hidden>전체화면</button>
     </div>
     <div id="err"></div>
@@ -208,6 +224,7 @@
       <div><b>영상의 fps를 확인해 주세요.</b><div class="sub">아이폰 슬로모션은 보통 120, 일반은 30 또는 60입니다. 고르기 전에는 전체 분석을 할 수 없습니다.</div></div>
       <div class="qfps"><button data-fps="30">30</button><button data-fps="60">60</button><button data-fps="120">120</button><button data-fps="240">240</button></div>
     </div>
+    <div class="tlbar"><div class="tlwrap"><div class="ticks"></div><input type="range" class="tl" min="0" max="0" value="0" step="1" disabled aria-label="영상 시간 이동"></div><span class="tltime n sub">-</span><span id="tlHint" class="sub"></span></div>
     <div class="ctl">
       <button id="play">재생</button>
       <button data-step="-10">-10</button><button data-step="-1">-1</button><button data-step="1">+1</button><button data-step="10">+10</button>
@@ -233,7 +250,8 @@
       </section>
       <section class="g" data-tabs="steps">
         <div class="gh"><b>코너별 평균 소요 시간</b><span class="sub">T에서 나가 코너를 찍고 돌아오기까지 · 노란 막대 = 가장 느린 코너</span></div>
-        <div class="gfill"><svg id="bars" viewBox="0 0 1000 220"></svg></div>
+        <div class="gfill"><svg id="bars" viewBox="0 0 1000 220"></svg>
+          <div id="ghostOrder" class="mapRow" hidden><svg id="ghostSvg" viewBox="-1.05 -1.05 8.5 12.1"></svg><div class="legend"><div id="ghostText"></div></div></div></div>
       </section>
     </div>
   </div>
@@ -248,13 +266,17 @@
 
     <section class="card" id="calSec" data-tabs="game steps">
       <h2>코트 맞추기</h2>
-      <div id="calSteps" style="margin-bottom:8px"></div>
-      <div class="row" style="margin-top:0"><button id="calStart">코트 맞추기</button><button id="calUndo" disabled>되돌리기</button><button id="calReset" disabled>초기화</button></div>
-      <div id="calPickBox" class="row" hidden><label>지금 찍을 점 <select id="calPick" style="max-width:100%"></select></label></div>
-      <div id="calInfo" class="sub" style="margin-top:6px"></div>
-      <label class="sub"><input type="checkbox" id="showCourt" checked> 영상에 코트 선 표시</label>
-      <details class="mini"><summary class="sub">어떤 점을 찍나요?</summary>
-        <p class="sub" style="margin:4px 0 0">뒷벽 쪽에서 찍은 영상이면 앞벽 바닥 모서리, 숏라인(앞벽 쪽 가로선)과 옆벽이 만나는 곳, T(숏라인과 가운데 세로선이 만나는 곳), 서비스박스 뒤쪽 안 모서리가 보입니다. 선수가 가리면 프레임을 옮겨서 찍고, 안 보이는 점은 건너뛰세요. 점이 많고 퍼져 있을수록 정확합니다.</p></details>
+      <div class="calRow">
+        <svg id="calDiag" viewBox="-1.05 -1.05 8.5 12.1"></svg>
+        <div class="calSide">
+          <div id="calSteps"></div>
+          <div class="row"><button id="calStart" class="primary">코트 맞추기</button><button id="calSkip" hidden>건너뛰기(안 보임)</button><button id="calMore" hidden>더 찍기(선택)</button></div>
+          <div class="row"><button id="calUndo" disabled>되돌리기</button><button id="calReset" disabled>초기화</button></div>
+          <div id="calInfo" class="sub" style="margin-top:6px"></div>
+          <label class="sub"><input type="checkbox" id="showCourt" checked> 영상에 코트 선 표시</label>
+        </div>
+      </div>
+      <div class="sub" style="margin-top:6px">뒤에서 찍은 영상에서는 1~7번이 보입니다. 8~10은 보이면 찍으세요(정확도가 올라감).</div>
     </section>
     <section class="card" data-tabs="game"><h2>분석할 사람</h2>
       <label><input type="radio" name="person" value="0" checked> 1번 (하늘색)</label>&nbsp;&nbsp;<label><input type="radio" name="person" value="1"> 2번 (주황)</label>
@@ -294,8 +316,8 @@
 <script type="module">
 import { KEYS, LABELS, checkpointValue, judge, resolveMetric, metricUnit, fmtMetric, roundMetric, metricDecimals,
   detectEvents, signalValue, medianSmooth, fpsFromDeltas, strideFor } from './angles.mjs';
-import { COURT, T, COURT_POINTS, COURT_LINES, CORNERS, CORNER_LABEL, calibrate, footPoint, courtPos, tOccupancy,
-  detectExcursions, cornerAvg, slowestCorner, totalSec, drawCourtLines, drawCalPoints } from './court.mjs';
+import { T, COURT_POINTS, CAL_ORDER, CAL_REQUIRED, CORNERS, CORNER_LABEL, calibrate, footPoint, courtPos, tOccupancy,
+  detectExcursions, cornerAvg, slowestCorner, totalSec, handsUp, detectHandsUp, drawCourtLines, drawCalPoints, courtSvg, calGuideSvg, ghostGuideSvg } from './court.mjs';
 import { MP_VERSION, COLORS, MODE_LABEL, loadPose, toPeople, personAngles, createTracker,
   drawSkeleton, drawKnees, drawBadge, drawCheckpoints, loadSetting, saveSetting } from './pose.mjs';
 import { METRICS, summarizeSession, withDiffs, fmtValue, recoveryHr } from './history.mjs';
@@ -311,7 +333,8 @@ let captures = [], videoName = '', videoUrl = null;
 let cps = null;
 let events = [], eventPerson = 0, probing = false, probeId = 0; // auto-detected knee-bend moments; fps probe state
 let fpsOk = false;                      // false until fps is auto-detected or chosen by the user (blocks the full analysis)
-let clicks = [], cal = null, calMode = false, calPickId = COURT_POINTS[0].id, savedCal = null; // court calibration
+let clicks = [], cal = null, calMode = false, savedCal = null; // court calibration (wizard: see the court section)
+let skipped = new Set(), calActs = [], calLimit = CAL_REQUIRED; // ids skipped as not visible; history for 되돌리기; steps in this round (7, or 10 after 더 찍기)
 let cst = null, courtTrackNow = [];     // cached court statistics (recomputed by refreshData)
 let hist = [];                          // 변화 기록: summaries with diffs
 const openSrc = new Set();              // checkpoint ids whose "근거 보기" is expanded
@@ -335,6 +358,7 @@ const curFrame = () => Math.min(Math.floor(video.currentTime * fps() + 1e-3), Ma
 const status = t => { $('status').textContent = t; $('status').title = t; };
 const angles = p => personAngles(p, mode(), overlay.width, overlay.height);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const clock = t => { const m = Math.floor(t / 60); return `${m}:${(t - m * 60).toFixed(1).padStart(4, '0')}`; };
 const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
 const htmlCache = {};
 const setHtml = (id, html) => { if (htmlCache[id] !== html) { $(id).innerHTML = html; htmlCache[id] = html; } };
@@ -388,7 +412,7 @@ function openFile(file) {
   videoName = file.name;
   $('label').value = file.name.replace(/\.[^.]+$/, ''); // always the new file's name
   series = new Map(); analyzedStride = null; analyzedMode = null; captures = []; events = []; persons = [null, null]; tracker.reset(); marks.clear();
-  clicks = []; cal = null; calMode = false; calPickId = COURT_POINTS[0].id; savedCal = readSavedCal(file.name);
+  clicks = []; cal = null; calMode = false; skipped = new Set(); calActs = []; calLimit = CAL_REQUIRED; savedCal = readSavedCal(file.name);
   hrLoad(); renderCaptures(); updateAnalyze(); refreshData();
   $('err').style.display = 'none';
   videoUrl = URL.createObjectURL(file);
@@ -427,11 +451,11 @@ video.onloadedmetadata = async () => {
   if (!video.videoWidth) return showDecodeError();
   overlay.width = video.videoWidth; overlay.height = video.videoHeight;
   $('hint').hidden = true; vbox.hidden = false; $('fsBtn').hidden = false; stage.classList.remove('empty'); fit();
-  if (savedCal && savedCal.w === overlay.width && savedCal.h === overlay.height) { setClicks(savedCal.clicks, false); status('이 영상 이름으로 저장된 코트 맞춤을 불러왔습니다. 라인이 바닥과 맞는지 확인하세요.'); }
+  if (savedCal && savedCal.w === overlay.width && savedCal.h === overlay.height) { calActs = savedCal.clicks.map(c => ({ id: c.id, type: 'click' })); setClicks(savedCal.clicks, false); status('이 영상 이름으로 저장된 코트 맞춤을 불러왔습니다. 라인이 바닥과 맞는지 확인하세요.'); }
   await seekFrame(0);
   await autoFps();
 };
-video.onseeked = () => { if (!analyzing && !probing) { detect(); render(); } };
+video.onseeked = () => { if (!analyzing && !probing && !scrubbing) { detect(); render(); } };
 
 // ---- fps: auto-detect, or the user must choose (the full analysis is blocked until one of the two happened) ----
 function updateAnalyze() { $('analyze').disabled = analyzing || (!!video.duration && !fpsOk && !probing); }
@@ -488,11 +512,11 @@ function seekFrame(n) {
   });
 }
 function onFrame() {
-  if (!analyzing && !probing) { detect(); render(); }
+  if (!analyzing && !probing && !scrubbing) { detect(); render(); }
   if (!video.paused) video.requestVideoFrameCallback(onFrame);
 }
 video.onplay = () => { $('play').textContent = '정지'; video.requestVideoFrameCallback(onFrame); };
-video.onpause = () => { $('play').textContent = '재생'; if (!analyzing && !probing) { detect(); render(); } };
+video.onpause = () => { $('play').textContent = '재생'; if (!analyzing && !probing && !scrubbing) { detect(); render(); } };
 
 // ---- pose ----
 function detect() {
@@ -524,6 +548,7 @@ function render(force = false) {
   const t = video.currentTime || 0, m = Math.floor(t / 60);
   const info = `프레임 ${video.duration ? f : '-'} / ${total() || '-'} · ${String(m).padStart(2, '0')}:${(t - m * 60).toFixed(3).padStart(6, '0')}`;
   $('info').textContent = info; $('fsInfo').textContent = info;
+  syncSlider(f, t);
   $('modeTag').textContent = `각도: ${MODE_LABEL[mode()]}`;
   updateCursor();
   renderLive(a, f);
@@ -632,6 +657,58 @@ document.addEventListener('click', e => {
   if (t) setTab(t.dataset.tab);
 });
 
+// ---- time slider + wheel scrub (the slider exists twice: under the video and inside the fullscreen stage) ----
+// While the user drags (or wheels), the video only seeks and the skeleton is hidden; the pose is detected again when the
+// movement stops for 120 ms or the slider is released.
+const tls = [...document.querySelectorAll('.tl')];
+let scrubbing = false, dragging = false, scrubTimer = 0, wheelAcc = 0;
+function syncSlider(f, t) {
+  const on = !!video.duration && !analyzing && !probing, dur = video.duration || 0;
+  for (const el of tls) { el.max = Math.max(total() - 1, 0); el.disabled = !on; if (!dragging) el.value = f; }
+  document.querySelectorAll('.tltime').forEach(e => { e.textContent = dur ? `${clock(t)} / ${clock(dur)}` : '-'; });
+}
+function endScrub() {
+  clearTimeout(scrubTimer);
+  if (!scrubbing) return;
+  scrubbing = false; tracker.reset();
+  if (!video.seeking) { detect(); render(); } // else onseeked does it
+}
+function scrubTo(n) {
+  if (!video.duration || analyzing || probing) return;
+  video.pause(); scrubbing = true; persons = [null, null];
+  video.currentTime = (Math.max(0, Math.min(n, total() - 1)) + 0.5) / fps();
+  render();
+  clearTimeout(scrubTimer); scrubTimer = setTimeout(endScrub, 120);
+}
+for (const el of tls) {
+  el.addEventListener('pointerdown', () => { dragging = true; });
+  el.addEventListener('input', () => scrubTo(Number(el.value)));
+  el.addEventListener('change', () => { dragging = false; endScrub(); el.blur(); }); // blur: keep Space / arrows for the video
+}
+addEventListener('pointerup', () => { if (dragging) { dragging = false; endScrub(); } });
+// Wheel / trackpad over the video: one notch (100 px of scroll) = 1 second back or forward, with Shift = 1 frame.
+stage.addEventListener('wheel', e => {
+  if (!video.duration || analyzing || probing) return;
+  e.preventDefault();
+  const d = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+  wheelAcc += e.deltaMode === 1 ? d * 100 / 3 : d;
+  const k = Math.trunc(wheelAcc / 100);
+  if (!k) return;
+  wheelAcc -= k * 100;
+  scrubTo(curFrame() + k * (e.shiftKey ? 1 : Math.round(fps())));
+}, { passive: false });
+// Small marks above the slider: knee-bend moments (yellow), ghosting visit starts (orange), hands-up start signal (blue span).
+function renderTicks() {
+  if (!cst) return;
+  const dur = video.duration || 1, pos = t => Math.max(0, Math.min(1, t / dur)).toFixed(4), left = t => `left:calc(8px + (100% - 16px) * ${pos(t)})`;
+  const k = events.map(e => `<i class="k" style="${left(e.time_sec)}" title="무릎 굽힘 #${e.n}"></i>`).join('');
+  const v = cst.ex.map((e, i) => `<i class="v" style="${left(e.start_sec)}" title="고스팅 방문 ${i + 1} 시작"></i>`).join('');
+  const h = cst.hu.map(x => `<i class="h" style="${left(x.start_sec)};width:max(3px, calc((100% - 16px) * ${(Math.max(0, x.end_sec - x.start_sec) / dur).toFixed(4)}))" title="만세 ${clock(x.start_sec)}~${clock(x.end_sec)}"></i>`).join('');
+  document.querySelectorAll('.ticks').forEach(el => { el.innerHTML = k + v + h; });
+  const kinds = [events.length && '노랑 무릎 굽힘', cst.ex.length && '주황 방문 시작', cst.hu.length && '파랑 만세'].filter(Boolean);
+  $('tlHint').textContent = kinds.length ? '눈금: ' + kinds.join(' · ') : '';
+}
+
 // ---- tabs ----
 function setTab(t) {
   document.body.dataset.tab = t;
@@ -657,7 +734,7 @@ $('analyze').onclick = async () => {
   for (let f = 0; f < n && !cancelled; f += stride) {
     await seekFrame(f);
     const ps = detect(); render();
-    series.set(f, ps.map(p => p ? { ...angles(p), foot: footPoint(p.lm, overlay.width, overlay.height) } : null)); // foot: pixel point under the player (court mapping is derived later)
+    series.set(f, ps.map(p => p ? { ...angles(p), foot: footPoint(p.lm, overlay.width, overlay.height), hands: handsUp(p.lm) } : null)); // foot: pixel point under the player (court mapping is derived later); hands: both wrists above the nose (start signal)
     $('prog').value = f / n;
     if (f % (stride * 10) === 0) drawChart();
   }
@@ -759,57 +836,79 @@ new ResizeObserver(() => { if (tab() === 'pose') drawChart(); else if (tab() ===
 // ---- court: calibration (click floor marks -> homography), T occupancy, corner visits ----
 // The pixel point under the player is stored per analysed frame (series[..].foot); court metres are derived from the
 // calibration whenever needed, so the court can be set before or after the full analysis.
-const courtCfg = () => ({ t_radius_m: 1, away_m: 1.5, min_away_sec: 0.3, ...cps?.court });
+const courtCfg = () => ({ t_radius_m: 1, away_m: 1.5, min_away_sec: 0.3, hands_up_min_sec: 0.3, ...cps?.court });
 const readSavedCal = name => { try { return JSON.parse(loadSetting('court_' + name, 'null')); } catch { return null; } };
 function setClicks(list, save = true) {
   clicks = list; cal = list.length >= 4 ? calibrate(list) : null;
   if (save && videoName) saveSetting('court_' + videoName, JSON.stringify({ w: overlay.width, h: overlay.height, clicks }));
+  calAdvance();
   refreshData();
 }
+// Wizard: the next mark to click = first of the current round (CAL_ORDER, 7 or 10 marks) that is neither clicked nor skipped.
+const nextCalId = () => CAL_ORDER.slice(0, calLimit).find(id => !clicks.some(c => c.id === id) && !skipped.has(id)) || null;
+const unresolved = id => !clicks.some(c => c.id === id) && !skipped.has(id);
+// The round ends by itself when no mark is left and the calibration could be computed (4+ points).
+function calAdvance() { if (calMode && !nextCalId() && cal) calMode = false; }
+// Korean object particle (을/를) by the last Hangul syllable of the name
+const objPart = name => { const ch = [...name].reverse().find(c => c >= '가' && c <= '힣'); return ch && (ch.charCodeAt(0) - 0xAC00) % 28 ? '을' : '를'; };
 function renderCal() {
-  const nth = new Map(clicks.map((c, i) => [c.id, i + 1]));
-  $('calPick').innerHTML = COURT_POINTS.map(p => `<option value="${p.id}">${esc(p.name)}${nth.has(p.id) ? ` (찍음 #${nth.get(p.id)})` : ''}</option>`).join('');
-  $('calPick').value = calPickId;
-  $('calPickBox').hidden = !calMode; stage.classList.toggle('cal', calMode);
-  $('calStart').textContent = calMode ? '맞추기 끝내기' : '코트 맞추기';
-  $('calUndo').disabled = $('calReset').disabled = !clicks.length;
-  const cur = !cal ? (calMode || clicks.length ? 2 : 1) : series.size ? 4 : 3;
-  const steps = ['[코트 맞추기]를 누릅니다. 영상이 멈춥니다.', '목록에서 점 이름을 고르고 영상의 바닥 그 위치를 누릅니다. 보이는 점만 4개 이상.',
-    '빨간 코트 선이 영상의 바닥 선과 겹치는지 눈으로 확인합니다.', '[전체 분석]을 누르면 결과가 나옵니다.'];
-  $('calSteps').innerHTML = `<div><b>${cur}/4 단계</b> · ${steps[cur - 1]}</div>`;
+  const cur = calMode ? nextCalId() : null, done = new Set(clicks.map(c => c.id));
+  setHtml('calDiag', calGuideSvg(courtCfg().t_radius_m, { done, skipped, current: cur }));
+  stage.classList.toggle('cal', !!cur);
+  $('calStart').textContent = calMode ? '그만하기' : clicks.length ? '처음부터 다시' : '코트 맞추기';
+  $('calSkip').hidden = !cur;
+  $('calMore').hidden = calMode || !cal || !CAL_ORDER.slice(CAL_REQUIRED).some(unresolved);
+  $('calUndo').disabled = !calActs.length; $('calReset').disabled = !clicks.length && !skipped.size;
+  if (cur) {
+    const p = COURT_POINTS.find(q => q.id === cur), i = CAL_ORDER.indexOf(cur);
+    $('calSteps').innerHTML = `<div><b class="n">${i + 1}/${calLimit}</b> · ${esc(p.name)}${objPart(p.name)} 클릭하세요${i >= CAL_REQUIRED ? ' (선택)' : ''}</div>` +
+      '<div class="sub">선수가 가리면 프레임을 옮긴 뒤 누르세요. 화면에 안 보이는 점은 [건너뛰기]. 4점 이상이면 됩니다.</div>';
+  } else if (calMode) $('calSteps').innerHTML = '<div><b>점이 4개 이상 필요합니다.</b></div><div class="sub">[되돌리기]로 건너뛴 점을 다시 찍거나, 프레임을 옮겨 더 찍으세요.</div>';
+  else if (cal) $('calSteps').innerHTML = '<div><b>맞추기 완료.</b> 빨간 코트 선이 영상의 바닥 선과 겹치는지 확인하세요.</div><div class="sub">' + (series.size ? '결과가 아래와 위쪽 카드에 나옵니다.' : '[전체 분석]을 누르면 결과가 나옵니다.') + '</div>';
+  else $('calSteps').innerHTML = '<div>[코트 맞추기]를 누르면 번호 순서대로 한 점씩 안내합니다.</div><div class="sub">그림의 번호가 영상에서 찍을 바닥 위치입니다.</div>';
   $('calInfo').textContent = !clicks.length ? '' : clicks.length < 4 ? `점 ${clicks.length}개 — 4개 이상 필요합니다.`
     : !cal ? `점 ${clicks.length}개 — 계산할 수 없습니다(점이 한 줄에 가깝거나 겹쳤습니다). 다른 위치의 점을 더 찍으세요.`
     : `점 ${clicks.length}개 · 선 맞춤 오차 평균 ${cal.reproj_px.toFixed(1)}px (작을수록 좋음)`;
 }
+function resetCal() { skipped = new Set(); calActs = []; calLimit = CAL_REQUIRED; setClicks([]); }
 $('calStart').onclick = () => {
   if (!video.duration) return status('먼저 영상을 여세요.');
-  calMode = !calMode; if (calMode) video.pause();
+  if (calMode) calMode = false;
+  else { if (clicks.length || skipped.size) resetCal(); calMode = true; video.pause(); }
   renderCal(); render();
 };
-$('calUndo').onclick = () => { const last = clicks[clicks.length - 1]; if (last) { calPickId = last.id; setClicks(clicks.slice(0, -1)); } };
-$('calReset').onclick = () => { calPickId = COURT_POINTS[0].id; setClicks([]); };
-$('calPick').onchange = e => { calPickId = e.target.value; e.target.blur(); }; // blur: keep Space/arrow keys working for the video
+$('calMore').onclick = () => { calLimit = CAL_ORDER.length; calMode = true; video.pause(); renderCal(); render(); };
+$('calSkip').onclick = () => { const id = nextCalId(); if (!id) return; skipped.add(id); calActs.push({ id, type: 'skip' }); calAdvance(); renderCal(); render(); };
+$('calUndo').onclick = () => {
+  const a = calActs.pop(); if (!a) return;
+  calMode = true; video.pause(); // step back into the wizard at that mark
+  if (a.type === 'skip') { skipped.delete(a.id); renderCal(); render(); } else setClicks(clicks.filter(c => c.id !== a.id));
+};
+$('calReset').onclick = () => resetCal();
 $('showCourt').onchange = () => render();
 stage.addEventListener('click', e => {
   if (!calMode || !video.duration || analyzing || probing || !e.target.closest('#vbox')) return;
+  const id = nextCalId(); if (!id) return;
   const r = video.getBoundingClientRect();
   const px = [(e.clientX - r.left) / r.width * overlay.width, (e.clientY - r.top) / r.height * overlay.height];
-  setClicks([...clicks.filter(c => c.id !== calPickId), { id: calPickId, px }]); // clicking a used mark again moves it
-  const used = new Set(clicks.map(c => c.id)), next = COURT_POINTS.find(q => !used.has(q.id));
-  if (next) { calPickId = next.id; renderCal(); }
+  calActs.push({ id, type: 'click' });
+  setClicks([...clicks, { id, px }]);
 });
 
 // Positions of the selected person on the court for every analysed frame + everything derived from them.
 function courtStats() {
-  const s = sel(), o = courtCfg();
-  const track = cal && series.size ? [...series.keys()].sort((a, b) => a - b).map(f => ({ frame: f, t: f / fps(), p: courtPos(cal.H, series.get(f)[s]?.foot) })) : [];
-  const ex = detectExcursions(track, T, o), avg = cornerAvg(ex);
-  return { track, o, occ: tOccupancy(track, o.t_radius_m), ex, avg, slow: slowestCorner(avg), total: totalSec(ex) };
+  const s = sel(), o = courtCfg(), frames = [...series.keys()].sort((a, b) => a - b);
+  const track = cal && series.size ? frames.map(f => ({ frame: f, t: f / fps(), p: courtPos(cal.H, series.get(f)[s]?.foot) })) : [];
+  // Start signal: the first hands-up span of the selected person; its END (arms come down) is the test start. Visits are counted after it.
+  const hu = detectHandsUp(frames.map(f => ({ t: f / fps(), up: series.get(f)[s]?.hands ?? null })), o), start = hu.length ? hu[0].end_sec : null;
+  const ex = detectExcursions(start == null ? track : track.filter(q => q.t >= start), T, o), avg = cornerAvg(ex);
+  return { track, o, occ: tOccupancy(track, o.t_radius_m), ex, avg, slow: slowestCorner(avg), hu, start,
+    total: start != null && ex.length ? ex[ex.length - 1].return_sec - start : totalSec(ex) };
 }
 // Everything that depends on the analysis result, the court or the selected person. Not per video frame.
 function refreshData() {
   cst = courtStats(); courtTrackNow = cst.track;
-  renderSummary(); renderEvents(); renderCal(); renderMaps(); renderVisits(); renderHr(); renderReco();
+  renderSummary(); renderEvents(); renderCal(); renderMaps(); renderVisits(); renderHr(); renderReco(); renderTicks();
   drawChart(); drawBars(); render();
 }
 
@@ -830,7 +929,7 @@ function renderSummary() {
       : ok ? `T에서 ${o.t_radius_m}m 안에 있던 시간의 비율입니다. 랠리 사이 쉬는 시간도 들어갑니다.` : '코트 안에서 잡힌 위치가 없습니다. 코트 맞춤을 확인하세요.';
   } else if (t === 'steps') {
     const n = st.ex.length, slow = st.slow;
-    h = stat('고스팅 총시간', ok && st.total != null ? st.total.toFixed(1) + '초' : '-', '첫 이탈~마지막 복귀') +
+    h = stat('고스팅 총시간', ok && st.total != null ? st.total.toFixed(1) + '초' : '-', st.start != null ? `시작: 만세 ${clock(st.start)}` : series.size ? '<span class="bad">시작 신호(만세) 못 찾음</span> · 첫 이탈~마지막 복귀' : '만세 끝~마지막 복귀') +
       stat('방문', ok ? n + '회' : '-', ok ? (n === 18 ? '6코너 x 3바퀴' : `<span class="bad">18회가 아님 (${n}회 감지)</span>`) : '') +
       stat('가장 느린 코너', slow ? CORNER_LABEL[slow] : '-', slow ? st.avg[slow].avg_sec.toFixed(2) + '초' : '', 'hl');
     note = !cal ? '아래에서 코트 맞추기를 먼저 하세요.' : !series.size ? '전체 분석을 하면 나옵니다.' : ok ? '' : '코트 안에서 잡힌 위치가 없습니다. 코트 맞춤을 확인하세요.';
@@ -860,10 +959,7 @@ function renderMaps() {
   const st = cst, o = st.o, ok = cal && series.size && st.occ.valid;
   $('mapMsg').textContent = !cal ? '"코트 맞추기"를 하면 이동 지도가 나옵니다.' : !series.size ? '전체 분석을 하면 이동 지도가 나옵니다.' : ok ? '' : '코트 안에서 잡힌 위치가 없습니다. 코트 맞춤을 확인하세요.';
   const f2 = x => x.toFixed(2), v = st.track.filter(q => q.p);
-  let g = `<rect x="0" y="0" width="${COURT.width}" height="${COURT.length}" fill="#efe6cf"/>` +
-    `<circle cx="${T[0]}" cy="${T[1]}" r="${o.t_radius_m}" fill="rgba(60,140,200,.22)" stroke="#3c8cc8" stroke-width=".04"/>` +
-    COURT_LINES.map(([a, b]) => `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="#c0392b" stroke-width=".06"/>`).join('') +
-    `<text x="${T[0]}" y="-.12" font-size=".32" fill="#555" text-anchor="middle">앞벽</text><text x="${T[0]}" y="${COURT.length + .36}" font-size=".32" fill="#555" text-anchor="middle">뒷벽</text>`;
+  let g = courtSvg(o.t_radius_m);
   v.forEach((q, i) => { g += `<circle cx="${f2(q.p[0])}" cy="${f2(q.p[1])}" r=".05" fill="hsl(210,85%,${(72 - 44 * (v.length > 1 ? i / (v.length - 1) : 1)).toFixed(0)}%)"/>`; });
   st.ex.forEach((e, i) => { g += `<circle cx="${f2(e.far_m[0])}" cy="${f2(e.far_m[1])}" r=".16" fill="none" stroke="#e67e22" stroke-width=".05"/>` +
     `<text x="${f2(e.far_m[0])}" y="${f2(e.far_m[1] - .22)}" font-size=".34" font-weight="700" fill="#a04000" text-anchor="middle">${i + 1}</text>`; });
@@ -892,10 +988,18 @@ function mapClick(svg) {
 $('map').onclick = mapClick($('map')); $('map2').onclick = mapClick($('map2'));
 
 function drawBars() {
-  const svg = $('bars'), H = fitBox(svg, 220), st = cst;
+  const svg = $('bars'), st = cst;
   if (!st) return;
   const has = cal && series.size && st.ex.length;
-  if (!has) { svg.innerHTML = `<text x="${CW / 2}" y="${H / 2}" fill="#9aa4b2" font-size="17" text-anchor="middle">${!cal ? '코트를 맞추고 전체 분석을 하면 코너별 시간이 막대로 나옵니다' : !series.size ? '전체 분석을 하면 코너별 시간이 막대로 나옵니다' : '코너 방문이 감지되지 않았습니다'}</text>`; return; }
+  svg.toggleAttribute('hidden', !has); $('ghostOrder').hidden = !!has;
+  if (!has) { // before the result: show the test order instead of an empty chart
+    const msg = !cal ? '코트를 맞추고 전체 분석을 하면 코너별 시간이 막대로 나옵니다.' : !series.size ? '전체 분석을 하면 코너별 시간이 막대로 나옵니다.' : '코너 방문이 감지되지 않았습니다.';
+    setHtml('ghostSvg', ghostGuideSvg(st.o.t_radius_m));
+    setHtml('ghostText', '<b>고스팅 테스트 순서</b><p style="margin:6px 0">T에서 출발해 번호 순서로 코너를 라켓으로 찍고 매번 T로 돌아옵니다. 3바퀴(18회).</p>' +
+      `<div class="sub">${CORNERS.map((c, i) => `${i + 1} ${CORNER_LABEL[c]}`).join(' → ')}</div><div class="sub" style="margin-top:6px">시작 신호: T에서 두 팔을 번쩍 들었다가 내리면 그때부터 시간을 잽니다(만세).</div><div class="sub" style="margin-top:8px">${msg}</div>`);
+    return;
+  }
+  const H = fitBox(svg, 220);
   const top = 36, bot = 48, w = CW / CORNERS.length, bw = Math.min(110, w * 0.6);
   const max = Math.max(...CORNERS.filter(c => st.avg[c].n).map(c => st.avg[c].avg_sec)) * 1.1 || 1;
   svg.innerHTML = CORNERS.map((c, i) => {
@@ -1002,10 +1106,10 @@ const calMeta = () => cal ? { points: cal.points.map(q => ({ name: q.name, px: q
 function courtJson() {
   const st = courtStats(), r2 = x => Math.round(x * 100) / 100, r3 = x => Math.round(x * 1000) / 1000;
   return { calibration: calMeta(), person: sel() + 1, t_occupancy_pct: st.occ.pct == null ? null : Math.round(st.occ.pct * 10) / 10,
-    t_radius_m: st.o.t_radius_m, away_m: st.o.away_m, min_away_sec: st.o.min_away_sec,
+    t_radius_m: st.o.t_radius_m, away_m: st.o.away_m, min_away_sec: st.o.min_away_sec, hands_up_min_sec: st.o.hands_up_min_sec,
     excursions: st.ex.map(e => ({ start_sec: r3(e.start_sec), far_sec: r3(e.far_sec), return_sec: r3(e.return_sec), duration_sec: r3(e.duration_sec), corner: e.corner, far_m: e.far_m.map(r2), far_dist_m: r2(e.far_dist_m) })),
     corner_avg: Object.fromEntries(CORNERS.map(c => [c, { n: st.avg[c].n, avg_sec: st.avg[c].n ? r3(st.avg[c].avg_sec) : null }])),
-    slowest_corner: st.slow, total_sec: st.total == null ? null : r3(st.total), hr: hrData() };
+    slowest_corner: st.slow, total_sec: st.total == null ? null : r3(st.total), start_signal: st.start == null ? null : { type: 'hands_up', sec: r3(st.start) }, hr: hrData() };
 }
 // court_x,court_y in metres (2 decimals); empty without calibration or when the player is off court
 const courtCsv = a => { const m = cal && a.foot ? courtPos(cal.H, a.foot) : null; return m ? m[0].toFixed(2) + ',' + m[1].toFixed(2) : ','; };

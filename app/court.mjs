@@ -30,6 +30,11 @@ export const COURT_POINTS = [
   ['half_back', '가운데선-뒷벽', [COURT.tX, COURT.length]],
 ].map(([id, name, m]) => ({ id, name, m }));
 
+// Order of the calibration wizard: the number shown on the guide picture, on the video and in the text is index + 1.
+// 1-7 are normally visible from behind the back wall; 8-10 are optional (more points = better accuracy).
+export const CAL_ORDER = ['t', 'short_left', 'short_right', 'box_left', 'box_right', 'front_left', 'front_right', 'back_left', 'back_right', 'half_back'];
+export const CAL_REQUIRED = 7;
+
 // Court lines as [[x1, y1], [x2, y2]] segments (metres).
 export const COURT_LINES = [
   [[0, 0], [COURT.width, 0]], [[COURT.width, 0], [COURT.width, COURT.length]],
@@ -152,7 +157,8 @@ export const CORNER_LABEL = { front_left: '앞 왼쪽', front_right: '앞 오른
 // coach number): front corner ~1.0 m, side touch at the side wall ~short line (5.44), back corner ~8.75 m. Splitting at
 // the midpoints keeps a side touch made just in front of the short line out of "front". Left = x < 3.20 (T line = right).
 // ponytail: fixed depths; tune ROW_SPLIT if real ghosting footage puts touches elsewhere.
-const ROW_SPLIT = [(1.0 + COURT.shortLine) / 2, (COURT.shortLine + 8.75) / 2]; // 3.22, 7.10
+const TOUCH_FRONT = 1.0, TOUCH_BACK = 8.75; // typical touch depths of the front and back corners (m from the front wall)
+const ROW_SPLIT = [(TOUCH_FRONT + COURT.shortLine) / 2, (COURT.shortLine + TOUCH_BACK) / 2]; // 3.22, 7.10
 export function cornerOf(p) {
   const row = p[1] < ROW_SPLIT[0] ? 'front' : p[1] < ROW_SPLIT[1] ? 'side' : 'back';
   return `${row}_${p[0] < COURT.tX ? 'left' : 'right'}`;
@@ -182,6 +188,32 @@ export function detectExcursions(track, t, o) {
       if (cur && d > cur.fd) { cur.far = s; cur.fd = d; }
     }
   }
+  return out;
+}
+
+// ---- start signal: both hands up (hands up) ----
+
+// One person's landmarks -> true when both wrists (15, 16) are above the nose (0) in the image (smaller y), false when not,
+// null when a wrist or the nose is not visible. lm = normalized landmarks.
+export function handsUp(lm, minVis = 0.5) {
+  const ok = i => lm[i] && (lm[i].visibility ?? 1) >= minVis;
+  if (!ok(0) || !ok(15) || !ok(16)) return null;
+  return lm[15].y < lm[0].y && lm[16].y < lm[0].y;
+}
+
+// Spans where the hands stay up: samples [{t, up: true|false|null}] (null = not detected: skipped, neither starts nor ends a span).
+// A span starts at the first up sample and ends at the first sample with the hands down (the moment the arms come down; the last
+// sample's time if the track ends first). Spans shorter than o.hands_up_min_sec are dropped (a wave or a detection blip).
+// Returns [{start_sec, end_sec}].
+export function detectHandsUp(samples, o) {
+  const out = [];
+  let start = null, last = null;
+  const close = end => { if (start != null && end - start >= o.hands_up_min_sec - 1e-9) out.push({ start_sec: start, end_sec: end }); start = null; };
+  for (const s of samples) {
+    if (s.up == null) continue;
+    if (s.up) { if (start == null) start = s.t; last = s.t; } else close(s.t);
+  }
+  if (start != null) close(last);
   return out;
 }
 
@@ -216,14 +248,55 @@ export function drawCourtLines(ctx, H, Hinv, tRadius) {
   path(Array.from({ length: 48 }, (_, i) => [T[0] + tRadius * Math.cos(i / 48 * 2 * Math.PI), T[1] + tRadius * Math.sin(i / 48 * 2 * Math.PI)]), true); ctx.stroke();
 }
 
-// Numbered dots for the points the user has clicked: clicks = [{id, px}].
+// Numbered dots for the points the user has clicked: clicks = [{id, px}]; the number is the wizard number (CAL_ORDER).
 export function drawCalPoints(ctx, H, clicks) {
   const r = Math.max(7, H / 90), fs = Math.round(r * 1.7);
   ctx.font = `700 ${fs}px "Segoe UI", sans-serif`; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
-  clicks.forEach((c, i) => {
+  clicks.forEach(c => {
     ctx.fillStyle = 'rgba(0,216,255,.85)'; ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(c.px[0], c.px[1], r, 0, 7); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#000'; ctx.fillText(String(i + 1), c.px[0], c.px[1] + 1);
+    ctx.fillStyle = '#000'; ctx.fillText(String(CAL_ORDER.indexOf(c.id) + 1), c.px[0], c.px[1] + 1);
   });
   ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+}
+
+// ---- court pictures (SVG markup, top-down, front wall at the top; shared by the movement map and the two guides) ----
+
+// Court floor, T circle, lines and the front/back wall labels. pad moves the back-wall label down (the guides draw big dots there).
+export function courtSvg(tRadius, pad = 0) {
+  return `<rect x="0" y="0" width="${COURT.width}" height="${COURT.length}" fill="#efe6cf"/>` +
+    `<circle cx="${T[0]}" cy="${T[1]}" r="${tRadius}" fill="rgba(60,140,200,.22)" stroke="#3c8cc8" stroke-width=".04"/>` +
+    COURT_LINES.map(([a, b]) => `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="#c0392b" stroke-width=".06"/>`).join('') +
+    `<text x="${T[0]}" y="-.12" font-size=".32" fill="#555" text-anchor="middle">앞벽</text><text x="${T[0]}" y="${COURT.length + .36 + pad}" font-size=".32" fill="#555" text-anchor="middle">뒷벽</text>`;
+}
+
+const dot = (p, r, fill, stroke, label, fs = r * 1.3, fg = '#000') =>
+  `<circle cx="${p[0]}" cy="${p[1]}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width=".06"/>` +
+  (label == null ? '' : `<text x="${p[0]}" y="${p[1] + fs * .36}" font-size="${fs}" font-weight="700" fill="${fg}" text-anchor="middle">${label}</text>`);
+
+// Calibration guide: the 10 numbered marks. state = {done: Set(ids clicked), skipped: Set(ids), current: id | null}.
+// current = big yellow pulsing dot, done = green check, skipped = gray, pending = white (8-10 paler: optional).
+export function calGuideSvg(tRadius, { done = new Set(), skipped = new Set(), current = null } = {}) {
+  const at = id => COURT_POINTS.find(p => p.id === id).m;
+  let g = courtSvg(tRadius, .55), top = '';
+  CAL_ORDER.forEach((id, i) => {
+    const p = at(id), n = i + 1;
+    if (id === current) top = `<circle cx="${p[0]}" cy="${p[1]}" r=".75" fill="#ffd400" stroke="#000" stroke-width=".07"><animate attributeName="r" values=".6;.95;.6" dur="1s" repeatCount="indefinite"/></circle>` +
+      `<text x="${p[0]}" y="${p[1] + .3}" font-size=".85" font-weight="700" fill="#000" text-anchor="middle">${n}</text>`;
+    else if (done.has(id)) g += dot(p, .45, '#2e9e5b', '#145c33') + `<path d="M${p[0] - .22} ${p[1]}l.15 .17l.3 -.36" fill="none" stroke="#fff" stroke-width=".1" stroke-linecap="round" stroke-linejoin="round"/>`;
+    else if (skipped.has(id)) g += dot(p, .4, '#9aa4b2', '#5b6470', n, .5, '#fff');
+    else g += `<g opacity="${i < CAL_REQUIRED ? 1 : .6}">${dot(p, .4, '#fff', '#222', n, .5)}</g>`;
+  });
+  return g + top;
+}
+
+// Ghosting guide: the 6 corners in test order (numbers from CORNERS) with a dashed line from T to each. Touch spots are the
+// typical depths used by cornerOf (AI-set, not a coach number).
+const TOUCH = { front_left: [.8, TOUCH_FRONT], front_right: [COURT.width - .8, TOUCH_FRONT], side_left: [.5, COURT.shortLine], side_right: [COURT.width - .5, COURT.shortLine],
+  back_left: [.8, TOUCH_BACK], back_right: [COURT.width - .8, TOUCH_BACK] };
+export function ghostGuideSvg(tRadius) {
+  let g = courtSvg(tRadius, .55);
+  g += CORNERS.map(c => `<line x1="${T[0]}" y1="${T[1]}" x2="${TOUCH[c][0]}" y2="${TOUCH[c][1]}" stroke="#3c8cc8" stroke-width=".09" stroke-dasharray=".3 .22"/>`).join('');
+  g += CORNERS.map((c, i) => dot(TOUCH[c], .5, '#ffd400', '#000', i + 1, .6)).join('');
+  return g + dot(T, .38, '#3c8cc8', '#fff', 'T', .45, '#fff');
 }
