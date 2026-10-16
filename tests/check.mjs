@@ -228,12 +228,13 @@ const toPx = m => applyH(H0, m);
 // ---- corners, T occupancy, excursions ----
 assert.deepEqual(CORNERS.length, 6);
 assert.equal(cornerOf([1, 1]), 'front_left');
-assert.equal(cornerOf([5, 5.43]), 'front_right');
+assert.equal(cornerOf([5, 3.21]), 'front_right');
+assert.equal(cornerOf([5, 5.2]), 'side_right');   // side touch just in front of the short line
 assert.equal(cornerOf([3.19, 1]), 'front_left');
 assert.equal(cornerOf([3.2, 1]), 'front_right'); // the T line counts as right
-assert.equal(cornerOf([1, 5.44]), 'side_left');  // short line itself = side
-assert.equal(cornerOf([1, 7.04]), 'side_left');  // back line of the service boxes = side
-assert.equal(cornerOf([1, 7.05]), 'back_left');
+assert.equal(cornerOf([1, 3.22]), 'side_left');  // midpoint front/side row = side
+assert.equal(cornerOf([1, 7.09]), 'side_left');
+assert.equal(cornerOf([1, 7.1]), 'back_left');   // midpoint side/back row = back
 assert.equal(cornerOf([6, 6.2]), 'side_right');
 assert.equal(cornerOf([6, 9.7]), 'back_right');
 near(T[0], COURT.width / 2); near(T[1], 5.44);
