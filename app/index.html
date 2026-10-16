@@ -58,6 +58,20 @@
   #evList { list-style:none; padding:0; margin:8px 0 0; }
   #evList button { width:100%; text-align:left; margin-bottom:4px; }
   #evSum { font-size:13px; margin:8px 0 0; padding-left:18px; }
+  #stage.cal { cursor:crosshair; }
+  #courtBox { margin-top:12px; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px; }
+  #courtGrid { display:grid; grid-template-columns:280px minmax(0,1fr); gap:14px; margin-top:8px; }
+  @media (max-width: 700px) { #courtGrid { grid-template-columns:1fr; } }
+  #map { width:100%; display:block; background:#f4efe4; border-radius:4px; cursor:pointer; }
+  [hidden] { display:none !important; }
+  #ghost table { width:100%; max-width:460px; border-collapse:collapse; font-size:12px; margin:6px 0 10px; }
+  #ghost th { color:var(--dim); font-weight:600; text-align:right; }
+  #ghost td { text-align:right; padding:2px 3px; border-top:1px solid var(--line); font-family:Consolas, monospace; }
+  #ghost .l { text-align:left; font-family:inherit; }
+  #ghost tr[data-f] { cursor:pointer; } #ghost tr[data-f]:hover { background:#232a33; }
+  #ghost tr.slow td { color:var(--accent); font-weight:700; }
+  #ghost .warn { color:#ff9f1c; font-weight:600; }
+  #calInfo { margin-top:8px; font-size:13px; }
 </style>
 </head>
 <body>
@@ -96,6 +110,12 @@
       </div>
       <svg id="chart" viewBox="0 0 1000 220"></svg>
     </div>
+    <div id="courtBox">
+      <div class="row" style="margin-top:0"><b>코트 이동 지도</b> <span id="tOcc" class="chip" hidden></span>
+        <span class="dim">선택한 사람 기준 · 점을 누르면 그 시간으로 이동</span></div>
+      <div id="courtMsg" class="dim"></div>
+      <div id="courtGrid"><svg id="map" viewBox="-0.4 -0.4 7.2 10.55"></svg><div id="ghost"></div></div>
+    </div>
   </div>
   <aside>
     <section>
@@ -106,6 +126,18 @@
     <section>
       <h2>현재 프레임 각도</h2>
       <table id="angles"></table>
+    </section>
+    <section>
+      <h2>코트 맞추기</h2>
+      <p class="dim" style="margin:0 0 6px">영상의 바닥 표시를 4군데 이상 눌러 코트 위치를 알려주면 T 점유율, 이동 지도, 고스팅 시간이 나옵니다.
+        뒷벽 쪽에서 찍은 영상이면 앞벽 모서리, 숏라인, T, 서비스박스가 보입니다. 선수가 가리면 프레임을 옮겨서 찍으세요.</p>
+      <div class="row" style="margin-top:0">
+        <button id="calStart">코트 맞추기</button><button id="calUndo" disabled>되돌리기</button><button id="calReset" disabled>초기화</button>
+      </div>
+      <div id="calPickBox" class="row" hidden><label>지금 찍을 점 <select id="calPick" style="max-width:100%"></select></label>
+        <span class="dim">고른 뒤 영상에서 그 위치를 누르세요.</span></div>
+      <div id="calInfo" class="dim"></div>
+      <label><input type="checkbox" id="showCourt" checked> 코트 라인 표시</label>
     </section>
     <section>
       <h2>체크포인트</h2>
@@ -137,6 +169,8 @@
 <script type="module">
 import { KEYS, LABELS, checkpointValue, judge, resolveMetric, metricUnit, fmtMetric, roundMetric, metricDecimals,
   detectEvents, signalValue, medianSmooth, fpsFromDeltas, strideFor } from './angles.mjs';
+import { COURT, T, COURT_POINTS, COURT_LINES, CORNERS, CORNER_LABEL, calibrate, footPoint, courtPos, tOccupancy,
+  detectExcursions, cornerAvg, slowestCorner, totalSec, drawCourtLines, drawCalPoints } from './court.mjs';
 import { MP_VERSION, COLORS, MODE_LABEL, loadPose, toPeople, personAngles, createTracker,
   drawSkeleton, drawKnees, drawBadge, drawCheckpoints, loadSetting, saveSetting } from './pose.mjs';
 
@@ -150,6 +184,8 @@ let series = new Map(), analyzedStride = null, analyzedMode = null, analyzing = 
 let captures = [], videoName = '', videoUrl = null;
 let cps = null, cpHtml = '';
 let events = [], eventPerson = 0, probing = false, probeId = 0; // auto-detected hitting poses; fps probe state
+let clicks = [], cal = null, calMode = false, calPickId = COURT_POINTS[0].id, savedCal = null; // court calibration (see section "court")
+let courtTrackNow = [];
 const marks = new Map(); // frame -> {checkpointId: 'pass'|'fail'|'skip'} for type "visual"
 
 const fps = () => Number($('fps').value) || 60;
@@ -186,7 +222,7 @@ fetch('./checkpoints.json').then(r => r.json()).then(j => {
   $('cpGroup').add(new Option('전체', ''));
   for (const g of groups) $('cpGroup').add(new Option(g, g));
   if (!loadSetting('hand', '')) { $('hand').value = j.handedness_default || 'R'; }
-  render();
+  render(); renderCourt();
 }).catch(e => { $('cpList').textContent = 'checkpoints.json을 불러오지 못했습니다: ' + e.message; });
 
 // ---- video loading ----
@@ -197,7 +233,8 @@ function openFile(file) {
   videoName = file.name;
   $('label').value = file.name.replace(/\.[^.]+$/, ''); // always the new file's name
   series = new Map(); analyzedStride = null; analyzedMode = null; captures = []; events = []; persons = [null, null]; tracker.reset(); marks.clear();
-  renderCaptures(); renderEvents(); drawChart();
+  clicks = []; cal = null; calMode = false; calPickId = COURT_POINTS[0].id; savedCal = readSavedCal(file.name);
+  renderCaptures(); renderEvents(); drawChart(); renderCal(); renderCourt();
   $('err').style.display = 'none';
   videoUrl = URL.createObjectURL(file);
   video.src = videoUrl;
@@ -220,6 +257,7 @@ video.onloadedmetadata = async () => {
   if (!video.videoWidth) return showDecodeError();
   overlay.width = video.videoWidth; overlay.height = video.videoHeight;
   $('hint').hidden = true; $('stage').hidden = false;
+  if (savedCal && savedCal.w === overlay.width && savedCal.h === overlay.height) { setClicks(savedCal.clicks, false); status('이 영상 이름으로 저장된 코트 맞춤을 불러왔습니다. 라인이 바닥과 맞는지 확인하세요.'); }
   await seekFrame(0);
   await autoFps();
 };
@@ -289,6 +327,8 @@ function render() {
   const W = overlay.width, H = overlay.height, s = sel();
   ctx.clearRect(0, 0, W, H);
   const p = persons[s], a = angles(p);
+  if (cal && $('showCourt').checked) drawCourtLines(ctx, H, cal.Hinv, courtCfg().t_radius_m);
+  if (calMode) drawCalPoints(ctx, H, clicks);
   // this week's items only (cps.overlay_ids, max 3 lines, angle items): the box stays small so the player is not hidden
   const rows = overlayRows(a, video.duration ? curFrame() : 0);
   if (rows.length && $('showCp').checked) {
@@ -357,7 +397,7 @@ $('showCp').onchange = render;
 $('play').onclick = () => video.paused ? video.play() : video.pause();
 document.querySelectorAll('[data-step]').forEach(b => b.onclick = () => step(Number(b.dataset.step)));
 function step(n) { if (!video.duration || analyzing || probing) return; video.pause(); seekFrame(curFrame() + n); }
-document.querySelectorAll('input[name=person]').forEach(r => r.onchange = () => { render(); drawChart(); });
+document.querySelectorAll('input[name=person]').forEach(r => r.onchange = () => { render(); drawChart(); renderCourt(); });
 $('fps').onchange = () => { $('fpsAuto').hidden = true; $('stride').value = strideFor(fps()); render(); };
 $('chartKey').onchange = drawChart;
 $('hand').onchange = () => { saveSetting('hand', hand()); render(); };
@@ -382,7 +422,7 @@ $('analyze').onclick = async () => {
   for (let f = 0; f < n && !cancelled; f += stride) {
     await seekFrame(f);
     const ps = detect(); render();
-    series.set(f, ps.map(p => p ? angles(p) : null));
+    series.set(f, ps.map(p => p ? { ...angles(p), foot: footPoint(p.lm, overlay.width, overlay.height) } : null)); // foot: pixel point under the player (court mapping is derived later)
     $('prog').value = f / n;
     if (f % (stride * 10) === 0) drawChart();
   }
@@ -392,6 +432,7 @@ $('analyze').onclick = async () => {
   $('prog').hidden = $('cancel').hidden = true; $('analyze').disabled = false; $('mode').disabled = false;
   status(`${cancelled ? '분석 취소됨' : '분석 완료'}: ${series.size}개 프레임 (${MODE_LABEL[analyzedMode]})${events.length ? ` · 자동 감지 ${events.length}회` : ''}`);
   drawChart();
+  renderCourt();
   renderCaptures();
   if (events.length) await seekFrame(events[0].frame);
 };
@@ -469,6 +510,11 @@ function updateCursor() {
   const c = $('cursor'); if (!c) return;
   const x = video.duration ? cx(curFrame()) : PL;
   c.setAttribute('x1', x); c.setAttribute('x2', x);
+  const mc = $('mapCur'), p = persons[sel()];
+  if (mc) { // live position on the map (works without a full analysis)
+    const q = cal && p ? courtPos(cal.H, footPoint(p.lm, overlay.width, overlay.height)) : null;
+    mc.setAttribute('cx', q ? q[0] : -9); mc.setAttribute('cy', q ? q[1] : -9); mc.style.display = q ? '' : 'none';
+  }
 }
 $('chart').onclick = e => {
   if (!video.duration || analyzing) return;
@@ -477,6 +523,97 @@ $('chart').onclick = e => {
 };
 drawChart();
 render();
+
+// ---- court: calibration (click floor marks -> homography), T occupancy, corner visits ----
+// The pixel point under the player is stored per analysed frame (series[..].foot); court metres are derived from the
+// calibration whenever needed, so the court can be set before or after the full analysis.
+const courtCfg = () => ({ t_radius_m: 1, away_m: 1.5, min_away_sec: 0.3, ...cps?.court });
+const readSavedCal = name => { try { return JSON.parse(loadSetting('court_' + name, 'null')); } catch { return null; } };
+function setClicks(list, save = true) {
+  clicks = list; cal = list.length >= 4 ? calibrate(list) : null;
+  if (save && videoName) saveSetting('court_' + videoName, JSON.stringify({ w: overlay.width, h: overlay.height, clicks }));
+  renderCal(); renderCourt(); render();
+}
+function renderCal() {
+  const nth = new Map(clicks.map((c, i) => [c.id, i + 1]));
+  $('calPick').innerHTML = COURT_POINTS.map(p => `<option value="${p.id}">${esc(p.name)}${nth.has(p.id) ? ` (찍음 #${nth.get(p.id)})` : ''}</option>`).join('');
+  $('calPick').value = calPickId;
+  $('calPickBox').hidden = !calMode; $('stage').classList.toggle('cal', calMode);
+  $('calStart').textContent = calMode ? '맞추기 끝내기' : '코트 맞추기';
+  $('calUndo').disabled = $('calReset').disabled = !clicks.length;
+  $('calInfo').textContent = !clicks.length ? '' : clicks.length < 4 ? `점 ${clicks.length}개 — 4개 이상 필요합니다.`
+    : !cal ? `점 ${clicks.length}개 — 계산할 수 없습니다(점이 한 줄에 가깝거나 겹쳤습니다). 다른 위치의 점을 더 찍으세요.`
+    : `점 ${clicks.length}개 · 선 맞춤 오차 평균 ${cal.reproj_px.toFixed(1)}px (작을수록 좋음). 영상 위 빨간 선이 바닥 선과 겹치는지 눈으로 확인하세요.`;
+}
+$('calStart').onclick = () => {
+  if (!video.duration) return status('먼저 영상을 여세요.');
+  calMode = !calMode; if (calMode) video.pause();
+  renderCal(); render();
+};
+$('calUndo').onclick = () => { const last = clicks[clicks.length - 1]; if (last) { calPickId = last.id; setClicks(clicks.slice(0, -1)); } };
+$('calReset').onclick = () => { calPickId = COURT_POINTS[0].id; setClicks([]); };
+$('calPick').onchange = e => { calPickId = e.target.value; e.target.blur(); }; // blur: keep Space/arrow keys working for the video
+$('showCourt').onchange = render;
+$('stage').addEventListener('click', e => {
+  if (!calMode || !video.duration || analyzing || probing) return;
+  const r = video.getBoundingClientRect();
+  const px = [(e.clientX - r.left) / r.width * overlay.width, (e.clientY - r.top) / r.height * overlay.height];
+  setClicks([...clicks.filter(c => c.id !== calPickId), { id: calPickId, px }]); // clicking a used mark again moves it
+  const used = new Set(clicks.map(c => c.id)), next = COURT_POINTS.find(q => !used.has(q.id));
+  if (next) { calPickId = next.id; renderCal(); }
+});
+
+// Positions of the selected person on the court for every analysed frame + everything derived from them.
+function courtStats() {
+  const s = sel(), o = courtCfg();
+  const track = cal && series.size ? [...series.keys()].sort((a, b) => a - b).map(f => ({ frame: f, t: f / fps(), p: courtPos(cal.H, series.get(f)[s]?.foot) })) : [];
+  const ex = detectExcursions(track, T, o), avg = cornerAvg(ex);
+  return { track, o, occ: tOccupancy(track, o.t_radius_m), ex, avg, slow: slowestCorner(avg), total: totalSec(ex) };
+}
+const MAP_VB = { x: -0.4, y: -0.4, w: 7.2, h: 10.55 }; // metres around the court, front wall at the top
+function renderCourt() {
+  const st = courtStats(), o = st.o, ok = cal && series.size && st.occ.valid;
+  courtTrackNow = st.track;
+  $('courtMsg').textContent = !cal ? '오른쪽 "코트 맞추기"를 하면 T 점유율과 이동 지도가 나옵니다.' : !series.size ? '전체 분석을 하면 이동 지도와 T 점유율이 나옵니다.'
+    : ok ? '' : '코트 안에서 잡힌 위치가 없습니다. 코트 맞춤을 확인하세요.';
+  const chip = $('tOcc'); chip.hidden = !ok; if (ok) chip.textContent = `T 점유율 ${st.occ.pct.toFixed(0)}%`;
+  // map: floor, T circle, lines, position dots (light -> dark with time), numbered far points of corner visits
+  const f2 = x => x.toFixed(2), v = st.track.filter(q => q.p);
+  let g = `<rect x="0" y="0" width="${COURT.width}" height="${COURT.length}" fill="#efe6cf"/>` +
+    `<circle cx="${T[0]}" cy="${T[1]}" r="${o.t_radius_m}" fill="rgba(255,212,0,.28)" stroke="#d4a900" stroke-width=".04"/>` +
+    COURT_LINES.map(([a, b]) => `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="#c0392b" stroke-width=".06"/>`).join('') +
+    `<text x="${T[0]}" y="-.12" font-size=".32" fill="#555" text-anchor="middle">앞벽</text><text x="${T[0]}" y="${COURT.length + .36}" font-size=".32" fill="#555" text-anchor="middle">뒷벽</text>`;
+  v.forEach((q, i) => { g += `<circle cx="${f2(q.p[0])}" cy="${f2(q.p[1])}" r=".05" fill="hsl(210,85%,${(72 - 44 * (v.length > 1 ? i / (v.length - 1) : 1)).toFixed(0)}%)"/>`; });
+  st.ex.forEach((e, i) => { g += `<circle cx="${f2(e.far_m[0])}" cy="${f2(e.far_m[1])}" r=".16" fill="none" stroke="#e67e22" stroke-width=".05"/>` +
+    `<text x="${f2(e.far_m[0])}" y="${f2(e.far_m[1] - .22)}" font-size=".34" font-weight="700" fill="#a04000" text-anchor="middle">${i + 1}</text>`; });
+  $('map').innerHTML = g + '<circle id="mapCur" r=".16" fill="#ffd400" stroke="#000" stroke-width=".04" style="display:none"/>';
+  updateCursor();
+  // results: T occupancy, visit list, per-corner mean with the slowest corner highlighted
+  const sec = x => x.toFixed(2);
+  let h = '';
+  if (ok) {
+    const n = st.ex.length;
+    h += `<div><b>T 점유율 ${st.occ.pct.toFixed(1)}%</b> <span class="dim">(위치가 잡힌 ${st.occ.valid}/${st.occ.total} 프레임 중 T에서 ${o.t_radius_m}m 안 ${st.occ.inside}개. 랠리 사이 쉬는 시간도 포함됩니다.)</span></div>`;
+    h += `<div style="margin-top:8px"><b>고스팅 방문 ${n}회</b> ${n === 18 ? '<span class="dim">(6코너 x 3바퀴)</span>' : `<span class="warn">18회가 아님 (${n}회 감지)</span>`}` +
+      `${st.total != null ? ` · 첫 이탈~마지막 복귀 <b>${sec(st.total)}초</b>` : ''}</div>`;
+    if (n) {
+      h += '<table><tr><th>#</th><th class="l">코너</th><th>이탈</th><th>먼 점</th><th>복귀</th><th>소요(초)</th></tr>' +
+        st.ex.map((e, i) => `<tr data-f="${Math.round(e.far_sec * fps())}"><td>${i + 1}</td><td class="l">${CORNER_LABEL[e.corner]}</td><td>${sec(e.start_sec)}</td><td>${sec(e.far_sec)}</td><td>${sec(e.return_sec)}</td><td>${sec(e.duration_sec)}</td></tr>`).join('') + '</table>';
+      h += '<table><tr><th class="l">코너</th><th>횟수</th><th>평균(초)</th><th class="l"></th></tr>' +
+        CORNERS.map(c => `<tr class="${c === st.slow ? 'slow' : ''}"><td class="l">${CORNER_LABEL[c]}</td><td>${st.avg[c].n}</td><td>${st.avg[c].n ? sec(st.avg[c].avg_sec) : '-'}</td><td class="l">${c === st.slow ? '가장 느림' : ''}</td></tr>`).join('') + '</table>';
+    } else h += `<p class="dim">T에서 ${o.away_m}m 넘게 나갔다가 돌아온 구간이 없습니다.</p>`;
+  }
+  $('ghost').innerHTML = h;
+}
+const seekCourt = f => { if (video.duration && !analyzing && !probing) { video.pause(); seekFrame(f); } };
+$('ghost').onclick = e => { const r = e.target.closest('tr[data-f]'); if (r) seekCourt(Number(r.dataset.f)); };
+$('map').onclick = e => {
+  const r = $('map').getBoundingClientRect(), mx = MAP_VB.x + (e.clientX - r.left) / r.width * MAP_VB.w, my = MAP_VB.y + (e.clientY - r.top) / r.height * MAP_VB.h;
+  let best = null, bd = Infinity;
+  for (const q of courtTrackNow) if (q.p) { const d = Math.hypot(q.p[0] - mx, q.p[1] - my); if (d < bd) { bd = d; best = q; } }
+  if (best) seekCourt(best.frame);
+};
+renderCal(); renderCourt();
 
 // ---- capture ----
 $('capture').onclick = () => capture();
@@ -515,11 +652,13 @@ $('export').onclick = async () => {
   // angle_mode = mode of angles.csv when an analysis exists (captures carry their own angle_mode)
   const meta = { video_name: videoName, label, fps: fps(), stride: analyzedStride, width: video.videoWidth, height: video.videoHeight,
     duration_sec: Math.round(video.duration * 1000) / 1000, frames_total: total(), created_at: now.toISOString(), mediapipe_version: MP_VERSION,
-    checkpoints_version: cps?.version ?? null, handedness: hand(), angle_mode: analyzedMode || mode(), auto_detect: cps?.auto_detect ?? null };
+    checkpoints_version: cps?.version ?? null, handedness: hand(), angle_mode: analyzedMode || mode(), auto_detect: cps?.auto_detect ?? null,
+    court: calMeta() };
   const files = [
     ['meta.json', JSON.stringify(meta, null, 2)],
     ['angles.csv', anglesCsv()],
     ['events.json', JSON.stringify(events, null, 2)],
+    ['court.json', JSON.stringify(courtJson(), null, 2)],
     ['captures.json', JSON.stringify(captures.map(({ blob, ...c }) => c), null, 2)],
     ...captures.map(c => [c.image, c.blob]),
   ];
@@ -546,12 +685,24 @@ $('export').onclick = async () => {
     status(`파일 ${files.length}개를 내려받았습니다. ${dir} 폴더를 만들고 넣으세요 (PNG는 frames 폴더 안).`);
   }
 };
+// calibration for meta.json / court.json: points {name, px, m}, H = 3x3 row-major, pixels -> court metres
+const calMeta = () => cal ? { points: cal.points.map(q => ({ name: q.name, px: q.px.map(x => Math.round(x * 10) / 10), m: q.m })), H: cal.H, reproj_px: Math.round(cal.reproj_px * 100) / 100 } : null;
+function courtJson() {
+  const st = courtStats(), r2 = x => Math.round(x * 100) / 100, r3 = x => Math.round(x * 1000) / 1000;
+  return { calibration: calMeta(), person: sel() + 1, t_occupancy_pct: st.occ.pct == null ? null : Math.round(st.occ.pct * 10) / 10,
+    t_radius_m: st.o.t_radius_m, away_m: st.o.away_m, min_away_sec: st.o.min_away_sec,
+    excursions: st.ex.map(e => ({ start_sec: r3(e.start_sec), far_sec: r3(e.far_sec), return_sec: r3(e.return_sec), duration_sec: r3(e.duration_sec), corner: e.corner, far_m: e.far_m.map(r2), far_dist_m: r2(e.far_dist_m) })),
+    corner_avg: Object.fromEntries(CORNERS.map(c => [c, { n: st.avg[c].n, avg_sec: st.avg[c].n ? r3(st.avg[c].avg_sec) : null }])),
+    slowest_corner: st.slow, total_sec: st.total == null ? null : r3(st.total) };
+}
+// court_x,court_y in metres (2 decimals); empty without calibration or when the player is off court
+const courtCsv = a => { const m = cal && a.foot ? courtPos(cal.H, a.foot) : null; return m ? m[0].toFixed(2) + ',' + m[1].toFixed(2) : ','; };
 function anglesCsv() {
-  const rows = ['frame,time_sec,person,' + KEYS.join(',') + ',front'];
+  const rows = ['frame,time_sec,person,' + KEYS.join(',') + ',front,court_x,court_y'];
   for (const f of [...series.keys()].sort((a, b) => a - b)) {
     const t = (f / fps()).toFixed(3), ps = series.get(f);
-    if (!ps.some(Boolean)) rows.push(`${f},${t},` + ','.repeat(KEYS.length + 1));
-    ps.forEach((a, i) => a && rows.push(`${f},${t},${i + 1},` + KEYS.map(k => a[k] == null ? '' : a[k].toFixed(metricDecimals(k))).join(',') + ',' + (a.front ?? '')));
+    if (!ps.some(Boolean)) rows.push(`${f},${t},` + ','.repeat(KEYS.length + 3));
+    ps.forEach((a, i) => a && rows.push(`${f},${t},${i + 1},` + KEYS.map(k => a[k] == null ? '' : a[k].toFixed(metricDecimals(k))).join(',') + ',' + (a.front ?? '') + ',' + courtCsv(a)));
   }
   return rows.join('\n') + '\n';
 }
