@@ -94,7 +94,7 @@
 <script type="module">
 import { KEYS, LABELS, resolveMetric, fmtMetric, metricDecimals } from './angles.mjs';
 import { MP_VERSION, COLORS, MODE_LABEL, loadPose, toPeople, personAngles, createTracker,
-  drawSkeleton, drawKnee, drawBadge, loadSetting, saveSetting } from './pose.mjs';
+  drawSkeleton, drawKnees, drawBadge, loadSetting, saveSetting } from './pose.mjs';
 
 const $ = id => document.getElementById(id);
 const status = t => { $('status').textContent = t; };
@@ -145,7 +145,7 @@ function makePanel(tag, title) {
     c.clearRect(0, 0, W, H);
     P.people.forEach((p, i) => p && drawSkeleton(c, W, H, p.lm, COLORS[i], i === s, connections));
     const p = P.people[s], a = P.angles();
-    if (p) for (const k of ['knee_l', 'knee_r']) drawKnee(c, W, H, p.lm, k, COLORS[s], a[k]);
+    if (p) drawKnees(c, W, H, p.lm, COLORS[s], a);
     drawBadge(c, H, `${tag} · 각도: ${MODE_LABEL[mode()]}`);
     const t = v.currentTime || 0, m = Math.floor(t / 60);
     q('.info').textContent = `프레임 ${v.duration ? P.frame() : '-'} / ${P.total() || '-'} · ${P.fps()} fps · ${String(m).padStart(2, '0')}:${(t - m * 60).toFixed(3).padStart(6, '0')}`;

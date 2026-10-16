@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { KEYS, angle, trunkLean, poseAngles, angle3, trunkLean3, poseAngles3, stanceRatio, frontSide, resolveMetric, checkpointValue, judge,
   detectEvents, medianSmooth, signalValue, fpsFromDeltas, strideFor } from '../app/angles.mjs';
+import { layoutLabels } from '../app/pose.mjs';
+import { COURT, T, COURT_POINTS, CORNERS, homography, applyH, invertH, calibrate, footPoint, courtPos, tOccupancy,
+  cornerOf, detectExcursions, cornerAvg, slowestCorner, totalSec } from '../app/court.mjs';
 
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
 
@@ -148,6 +151,135 @@ assert.equal(fpsFromDeltas([]), null);
 // ---- stride ----
 assert.deepEqual([24, 30, 60, 120, 240, 1].map(strideFor), [1, 1, 2, 4, 8, 1]);
 
+// ---- overlay_ids + court settings ----
+assert.ok(Array.isArray(cpFile.overlay_ids) && cpFile.overlay_ids.length >= 1 && cpFile.overlay_ids.length <= 3, 'overlay_ids: 1..3 ids');
+for (const id of cpFile.overlay_ids) {
+  const c = cpFile.checkpoints.find(x => x.id === id);
+  assert.ok(c, `overlay_ids: "${id}" is not in checkpoints`);
+  assert.equal(c.type, 'angle', `overlay_ids: "${id}" is visual (not drawn on the video)`);
+}
+const CF = cpFile.court;
+assert.ok(CF, 'checkpoints.json: court missing');
+for (const k of ['t_radius_m', 'away_m', 'min_away_sec']) assert.ok(typeof CF[k] === 'number' && CF[k] > 0, `court.${k}`);
+assert.ok(CF.away_m > CF.t_radius_m, 'court.away_m must be larger than t_radius_m');
+assert.ok(/AI/.test(CF.note), 'court.note must say these are AI-set values');
+
+// ---- layoutLabels: knee labels never overlap ----
+const overlap = (a, b, it) => a.x < b.x + it.w && b.x < a.x + it.w && a.y < b.y + it.h && b.y < a.y + it.h;
+{
+  const it = { bx: 500, by: 400, cx: 520, w: 120, h: 60, r: 40 }; // both knees right at the same place
+  const [a, b] = layoutLabels([it, { ...it, bx: 510 }], 1280, 720);
+  assert.ok(!overlap(a, b, it), 'labels overlap');
+  const [l, r] = layoutLabels([{ ...it, bx: 400, cx: 520 }, { ...it, bx: 640 }], 1280, 720); // knee left/right of the body
+  assert.ok(l.x + it.w <= 400 && r.x >= 640, 'labels belong outside the knees');
+  const [c, d] = layoutLabels([{ ...it, by: 700 }, { ...it, by: 705 }], 1280, 720); // bottom edge: must move up, stay in frame
+  assert.ok(!overlap(c, d, it) && c.y + it.h <= 720 && d.y + it.h <= 720 && c.y >= 0 && d.y >= 0, 'labels not clamped/separated at the bottom');
+  const [e] = layoutLabels([{ ...it, bx: 10, cx: 200 }], 1280, 720);
+  assert.ok(e.x >= 0, 'label left of frame');
+}
+
+// ---- homography ----
+// px quad -> unit square; interior points checked against a known projective map (metres -> pixels)
+const H0 = [120, 10, 100, 15, 90, 80, 0.0004, 0.0009, 1]; // m -> px, mild perspective
+const toPx = m => applyH(H0, m);
+{
+  const quad = [[0, 0], [1, 0], [1, 1], [0, 1]], px = quad.map(toPx);
+  const H = homography(px, quad);
+  px.forEach((p, i) => { const q = applyH(H, p); near(q[0], quad[i][0]); near(q[1], quad[i][1]); });
+  for (const m of [[0.5, 0.5], [0.2, 0.9], [0.75, 0.1]]) { const q = applyH(H, toPx(m)); assert.ok(Math.hypot(q[0] - m[0], q[1] - m[1]) < 1e-9, `interior ${m}`); }
+  const Hi = invertH(H), back = applyH(Hi, [0.3, 0.6]), px2 = toPx([0.3, 0.6]);
+  assert.ok(Math.hypot(back[0] - px2[0], back[1] - px2[1]) < 1e-6, 'inverse maps metres back to pixels');
+  // 5 points (all consistent) -> least squares gives the same map; one point 6 px off -> still close
+  const five = [...quad, [0.5, 0.5]], p5 = five.map(toPx);
+  const H5 = homography(p5, five), q5 = applyH(H5, toPx([0.2, 0.9]));
+  assert.ok(Math.hypot(q5[0] - 0.2, q5[1] - 0.9) < 1e-9, '5-point exact');
+  const noisy = p5.map((p, i) => i === 4 ? [p[0] + 6, p[1]] : p), Hn = homography(noisy, five), qn = applyH(Hn, toPx([0.2, 0.9]));
+  assert.ok(qn && Math.hypot(qn[0] - 0.2, qn[1] - 0.9) < 0.05, 'noisy least squares stays near');
+  // degenerate
+  assert.equal(homography([[0, 0], [1, 1], [2, 2], [3, 3]], quad), null); // collinear
+  assert.equal(homography([[0, 0], [1, 1], [2, 2], [5, 5]], [[0, 0], [1, 0], [2, 3], [4, 1]]), null);
+  assert.equal(homography(px.slice(0, 3), quad.slice(0, 3)), null); // < 4
+  assert.equal(homography([[1, 1], [1, 1], [1, 1], [1, 1]], quad), null); // identical points
+}
+// court calibration: project all 10 marks with a camera-like map, click 4 / 10 of them, recover positions
+{
+  const Hc = [60, 0, 400, 0, 30, 150, 0, 0.12, 1].map((x, i) => i === 7 ? 0.0005 : x); // m -> px (rough rear-camera look)
+  const clicks = ids => ids.map(id => ({ id, px: applyH(Hc, COURT_POINTS.find(p => p.id === id).m) }));
+  for (const ids of [['front_left', 'front_right', 'back_left', 'back_right'], COURT_POINTS.map(p => p.id)]) {
+    const cal = calibrate(clicks(ids));
+    assert.ok(cal && cal.reproj_px < 1e-6, `calibrate ${ids.length} points`);
+    const m = courtPos(cal.H, applyH(Hc, [3.2, 5.44])); near(m[0], 3.2); near(m[1], 5.44);
+    assert.equal(cal.points.length, ids.length);
+  }
+  const cal = calibrate(clicks(['front_left', 'front_right', 'back_left', 'back_right']));
+  assert.equal(courtPos(cal.H, applyH(Hc, [3, -0.5])), null);  // 0.5 m in front of the front wall: outside the 0.3 m margin
+  assert.ok(courtPos(cal.H, applyH(Hc, [3, -0.2])), 'inside the margin is kept');
+  assert.equal(courtPos(cal.H, applyH(Hc, [7.0, 5])), null);
+  assert.equal(courtPos(null, [1, 1]), null);
+  assert.equal(calibrate(clicks(['front_left', 'front_right', 'short_left'])), null); // 3 points
+  // foot point: heel preferred, ankle fallback, both feet averaged, nothing visible -> null
+  const f = Array.from({ length: 33 }, () => ({ x: 0, y: 0, visibility: 0 }));
+  Object.assign(f[27], { x: 0.2, y: 0.8, visibility: 1 }); Object.assign(f[29], { x: 0.2, y: 0.9, visibility: 1 });
+  Object.assign(f[28], { x: 0.4, y: 0.8, visibility: 1 });
+  const fp = footPoint(f, 1000, 1000); near(fp[0], 300); near(fp[1], 850); // left heel (0.2,0.9) + right ankle (0.4,0.8)
+  assert.equal(footPoint(f.map(q => ({ ...q, visibility: 0 })), 1000, 1000), null);
+}
+
+// ---- corners, T occupancy, excursions ----
+assert.deepEqual(CORNERS.length, 6);
+assert.equal(cornerOf([1, 1]), 'front_left');
+assert.equal(cornerOf([5, 5.43]), 'front_right');
+assert.equal(cornerOf([3.19, 1]), 'front_left');
+assert.equal(cornerOf([3.2, 1]), 'front_right'); // the T line counts as right
+assert.equal(cornerOf([1, 5.44]), 'side_left');  // short line itself = side
+assert.equal(cornerOf([1, 7.04]), 'side_left');  // back line of the service boxes = side
+assert.equal(cornerOf([1, 7.05]), 'back_left');
+assert.equal(cornerOf([6, 6.2]), 'side_right');
+assert.equal(cornerOf([6, 9.7]), 'back_right');
+near(T[0], COURT.width / 2); near(T[1], 5.44);
+{
+  const OP = { t_radius_m: 1.0, away_m: 1.5, min_away_sec: 0.3 };
+  // piecewise-linear path through [t, x, y] waypoints, 20 samples per second
+  const path = wps => { const out = []; for (let t = 0; t <= wps[wps.length - 1][0] + 1e-9; t += 0.05) {
+    let i = 0; while (i < wps.length - 2 && wps[i + 1][0] < t) i++;
+    const [t0, x0, y0] = wps[i], [t1, x1, y1] = wps[i + 1], k = Math.max(0, Math.min(1, (t - t0) / (t1 - t0)));
+    out.push({ t: Math.round(t * 100) / 100, p: [x0 + (x1 - x0) * k, y0 + (y1 - y0) * k] }); } return out; };
+  const [tx, ty] = T;
+  const tr = path([[0, tx, ty], [1, tx, ty], [2, 1.0, 1.5], [2.5, 1.0, 1.5], [3.5, tx, ty], [5, tx, ty], [6.2, 5.5, 9.0], [6.7, 5.5, 9.0], [7.9, tx, ty], [9, tx, ty]]);
+  // noise that must be ignored: a wobble to 1.2 m from T (below away_m) and a one-sample spike to 2.5 m
+  const wob = path([[9, tx, ty], [9.2, tx + 1.2, ty], [9.4, tx, ty], [10, tx, ty]]);
+  const spike = path([[10, tx, ty], [10.05, tx + 2.5, ty], [10.1, tx, ty], [11, tx, ty]]);
+  const track = [...tr, ...wob.slice(1), ...spike.slice(1)];
+  const ex = detectExcursions(track, T, OP);
+  assert.equal(ex.length, 2);
+  assert.deepEqual(ex.map(e => e.corner), ['front_left', 'back_right']);
+  const leg = (x, y) => Math.hypot(x - tx, y - ty);
+  const d1 = leg(1.0, 1.5), d2 = leg(5.5, 9.0), within = (a, b) => Math.abs(a - b) < 0.1;
+  assert.ok(within(ex[0].start_sec, 1 + 1 / d1), `start ${ex[0].start_sec}`);              // leaves the 1 m circle on the way out
+  assert.ok(within(ex[0].return_sec, 3.5 - 1 / d1), `return ${ex[0].return_sec}`);
+  assert.ok(within(ex[0].duration_sec, 2.5 - 2 / d1), `duration ${ex[0].duration_sec}`);
+  assert.ok(ex[0].far_sec >= 2 - 1e-9 && ex[0].far_sec <= 2.5 + 1e-9);
+  assert.ok(within(ex[1].duration_sec, 2.9 - 2 * 1.0 / d2 * 1.2), `duration2 ${ex[1].duration_sec}`);
+  assert.ok(Math.abs(ex[0].far_dist_m - d1) < 1e-6);
+  const avg = cornerAvg(ex);
+  assert.deepEqual([avg.front_left.n, avg.back_right.n, avg.side_left.n], [1, 1, 0]);
+  assert.equal(avg.side_left.avg_sec, null);
+  assert.equal(slowestCorner(avg), 'back_right');
+  assert.equal(slowestCorner(cornerAvg([])), null);
+  near(totalSec(ex), ex[1].return_sec - ex[0].start_sec);
+  assert.equal(totalSec([]), null);
+  // a track that starts away from T is not a visit; a visit that never returns is not counted; nulls are skipped
+  assert.equal(detectExcursions(path([[0, 1, 1], [1, 1, 1], [2, tx, ty], [3, tx, ty]]), T, OP).length, 0);
+  assert.equal(detectExcursions(path([[0, tx, ty], [1, tx, ty], [2, 1, 1], [3, 1, 1]]), T, OP).length, 0);
+  const holes = tr.map((s, i) => i % 7 === 3 ? { ...s, p: null } : s);
+  assert.equal(detectExcursions(holes, T, OP).length, 2);
+  assert.deepEqual(detectExcursions([], T, OP), []);
+  // T occupancy: 20 samples at T, 10 at 3 m away, 5 undetected -> 20/30
+  const occ = tOccupancy([...Array(20).fill({ t: 0, p: [tx + 0.5, ty] }), ...Array(10).fill({ t: 0, p: [tx, ty + 3] }), ...Array(5).fill({ t: 0, p: null })], 1.0);
+  near(occ.pct, 20 / 30 * 100); assert.deepEqual([occ.inside, occ.valid, occ.total], [20, 30, 35]);
+  assert.equal(tOccupancy([], 1).pct, null);
+}
+
 const dir = new URL('../docs/data/', import.meta.url);
 const need = {
   'project.json': ['title', 'question', 'start_date', 'tournament_date', 'rule', 'youtube_playlist', 'metrics'],
@@ -169,4 +301,4 @@ const project = JSON.parse(readFileSync(new URL('project.json', dir), 'utf8'));
 assert.equal(project.metrics.length, 5);
 for (const m of project.metrics) for (const k of ['id', 'name', 'unit', 'better']) assert.ok(k in m, `metric missing ${k}`);
 
-console.log(`check.mjs: ok (angles 2D/3D, checkpoints, auto detect, fps, ${files.length} data files)`);
+console.log(`check.mjs: ok (angles 2D/3D, checkpoints, auto detect, fps, overlay labels, court homography/T/excursions, ${files.length} data files)`);

@@ -138,7 +138,7 @@
 import { KEYS, LABELS, checkpointValue, judge, resolveMetric, metricUnit, fmtMetric, roundMetric, metricDecimals,
   detectEvents, signalValue, medianSmooth, fpsFromDeltas, strideFor } from './angles.mjs';
 import { MP_VERSION, COLORS, MODE_LABEL, loadPose, toPeople, personAngles, createTracker,
-  drawSkeleton, drawKnee, drawBadge, drawCheckpoints, loadSetting, saveSetting } from './pose.mjs';
+  drawSkeleton, drawKnees, drawBadge, drawCheckpoints, loadSetting, saveSetting } from './pose.mjs';
 
 const $ = id => document.getElementById(id);
 const video = $('video'), overlay = $('overlay'), ctx = overlay.getContext('2d');
@@ -289,23 +289,23 @@ function render() {
   const W = overlay.width, H = overlay.height, s = sel();
   ctx.clearRect(0, 0, W, H);
   const p = persons[s], a = angles(p);
-  // checkpoint box first: skeleton and knee labels stay on top of it, so the box never hides the player
-  const rows = cpRows(a, video.duration ? curFrame() : 0);
+  // this week's items only (cps.overlay_ids, max 3 lines, angle items): the box stays small so the player is not hidden
+  const rows = overlayRows(a, video.duration ? curFrame() : 0);
   if (rows.length && $('showCp').checked) {
-    const g = $('cpGroup').value || '전체', front = a.front === 'l' ? 'L' : a.front === 'r' ? 'R' : '?';
+    const front = a.front === 'l' ? 'L' : a.front === 'r' ? 'R' : '?';
     // ponytail: box goes to the half the player is not in (hip midpoint); a two-player game can still overlap
     const right = !!p && (p.lm[23].x + p.lm[24].x) / 2 < 0.5;
-    drawCheckpoints(ctx, W, H, `체크포인트 · ${g} · 앞다리 ${front}`, rows.map(r => overlayRow(r)), right);
+    drawCheckpoints(ctx, W, H, `이번 주 체크 · 앞다리 ${front}`, rows.map(r => overlayRow(r)), right);
   }
   persons.forEach((q, i) => q && drawSkeleton(ctx, W, H, q.lm, COLORS[i], i === s, connections));
-  if (p) for (const k of ['knee_l', 'knee_r']) drawKnee(ctx, W, H, p.lm, k, COLORS[s], a[k]);
+  if (p) drawKnees(ctx, W, H, p.lm, COLORS[s], a);
   drawBadge(ctx, H, `각도: ${MODE_LABEL[mode()]}`);
   $('angles').innerHTML = KEYS.map(k => `<tr><td>${LABELS[k]}</td><td>${fmtMetric(k, a[k])}</td></tr>`).join('');
   const t = video.currentTime || 0, m = Math.floor(t / 60);
   $('info').textContent = `프레임 ${video.duration ? curFrame() : '-'} / ${total() || '-'} · ${fps()} fps · ${String(m).padStart(2, '0')}:${(t - m * 60).toFixed(3).padStart(6, '0')}`;
   $('modeTag').textContent = `각도: ${MODE_LABEL[mode()]}`;
   updateCursor();
-  renderCheckpoints(rows, a);
+  renderCheckpoints(cpRows(a, video.duration ? curFrame() : 0), a);
 }
 
 // ---- checkpoints panel ----
@@ -319,6 +319,10 @@ function evalCp(cp, a, frame) {
   return { value, status: judge(value, cp.target) };
 }
 const cpRows = (a, f) => visibleCps().map(cp => ({ cp, ...evalCp(cp, a, f) }));
+// On-video rows: ids from checkpoints.json overlay_ids in that order, angle items only, at most 3.
+const OVERLAY_MAX = 3;
+const overlayRows = (a, f) => (cps?.overlay_ids || []).map(id => cps.checkpoints.find(c => c.id === id))
+  .filter(cp => cp && cp.type === 'angle').slice(0, OVERLAY_MAX).map(cp => ({ cp, ...evalCp(cp, a, f) }));
 // Colors on the video: pass green, fail red, not measurable gray, baseline-compare white; visual items follow the toggle.
 const CP_COLOR = { pass: '#3ddc84', fail: '#ff5d5d', na: '#9aa4b2', ref: '#ffffff', skip: '#9aa4b2', unset: '#9aa4b2' };
 function overlayRow({ cp, value, status: st }) {

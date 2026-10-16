@@ -68,27 +68,51 @@ export function drawSkeleton(ctx, W, H, lm, color, selected, connections) {
   ctx.globalAlpha = 1;
 }
 
-// Arc + label at the knee. Arc geometry is always the 2D screen angle; the label shows `deg` (2D or 3D value).
-export function drawKnee(ctx, W, H, lm, key, color, deg) {
-  if (deg == null) return;
-  const [a, b, c] = JOINTS[key].map(i => ({ x: lm[i].x * W, y: lm[i].y * H }));
-  const r = H / 14, t1 = Math.atan2(a.y - b.y, a.x - b.x);
-  let diff = Math.atan2(c.y - b.y, c.x - b.x) - t1;
-  if (diff > Math.PI) diff -= 2 * Math.PI; if (diff < -Math.PI) diff += 2 * Math.PI;
-  ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.arc(b.x, b.y, r, t1, t1 + diff, diff < 0); ctx.closePath();
-  ctx.fillStyle = 'rgba(255,212,0,.35)'; ctx.fill();
-  ctx.beginPath(); ctx.arc(b.x, b.y, r, t1, t1 + diff, diff < 0);
-  ctx.strokeStyle = '#ffd400'; ctx.lineWidth = Math.max(4, H / 150); ctx.stroke();
-  // label on the outside of the knee (opposite the angle's bisector)
-  const mid = t1 + diff / 2 + Math.PI, fs = Math.round(H / 16);
-  const text = `${key.endsWith('_l') ? 'L' : 'R'} ${Math.round(deg)}°`;
+// Knee label boxes: pure layout so L and R labels never overlap. items: [{bx, by (knee, px), cx (body centre x, px),
+// w, h (box size), r (arc radius)}]. Each box goes on the outside of its knee (away from the body centre, `cx`),
+// clamped into the frame; if it still hits an earlier box it moves up or down to the nearest free spot.
+// Returns [{x, y}] top-left corners, same order as items.
+export function layoutLabels(items, W, H, gap = 4) {
+  const placed = [], m = 4;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, Math.max(lo, hi)));
+  const hit = (a, b) => a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap;
+  return items.map(it => {
+    const x = clamp(it.bx >= it.cx ? it.bx + it.r * 1.2 : it.bx - it.r * 1.2 - it.w, m, W - it.w - m);
+    const y0 = clamp(it.by - it.h / 2, m, H - it.h - m);
+    const free = y => y >= m && y <= H - it.h - m && !placed.some(j => hit({ x, y, w: it.w, h: it.h }, j));
+    const cand = [y0, ...placed.flatMap(j => [j.y + j.h + gap, j.y - it.h - gap])].filter(free);
+    const y = cand.length ? cand.reduce((p, c) => Math.abs(c - y0) < Math.abs(p - y0) ? c : p) : y0;
+    placed.push({ x, y, w: it.w, h: it.h });
+    return { x, y };
+  });
+}
+
+// Arcs at both knees + their angle labels. Arc geometry is always the 2D screen angle; the label shows degs[key]
+// (2D or 3D value, null = nothing drawn). Labels sit outside the knee and are kept apart by layoutLabels.
+export function drawKnees(ctx, W, H, lm, color, degs) {
+  const r = H / 14, fs = Math.round(H / 16), pad = fs * 0.3, items = [];
   ctx.font = `700 ${fs}px "Segoe UI", sans-serif`;
-  const tw = ctx.measureText(text).width, pad = fs * 0.3;
-  let x = b.x + Math.cos(mid) * r * 1.5 - tw / 2, y = b.y + Math.sin(mid) * r * 1.5 - fs / 2;
-  x = Math.max(4, Math.min(x, W - tw - 2 * pad - 4)); y = Math.max(4, Math.min(y, H - fs - 2 * pad - 4));
-  ctx.fillStyle = 'rgba(0,0,0,.75)'; ctx.fillRect(x, y, tw + 2 * pad, fs + 2 * pad);
-  ctx.strokeStyle = color; ctx.lineWidth = Math.max(2, H / 360); ctx.strokeRect(x, y, tw + 2 * pad, fs + 2 * pad);
-  ctx.fillStyle = '#fff'; ctx.textBaseline = 'top'; ctx.fillText(text, x + pad, y + pad * 1.1);
+  const cx = (lm[23].x + lm[24].x) / 2 * W;
+  for (const key of ['knee_l', 'knee_r']) {
+    const deg = degs[key];
+    if (deg == null) continue;
+    const [a, b, c] = JOINTS[key].map(i => ({ x: lm[i].x * W, y: lm[i].y * H }));
+    const t1 = Math.atan2(a.y - b.y, a.x - b.x);
+    let diff = Math.atan2(c.y - b.y, c.x - b.x) - t1;
+    if (diff > Math.PI) diff -= 2 * Math.PI; if (diff < -Math.PI) diff += 2 * Math.PI;
+    ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.arc(b.x, b.y, r, t1, t1 + diff, diff < 0); ctx.closePath();
+    ctx.fillStyle = 'rgba(255,212,0,.35)'; ctx.fill();
+    ctx.beginPath(); ctx.arc(b.x, b.y, r, t1, t1 + diff, diff < 0);
+    ctx.strokeStyle = '#ffd400'; ctx.lineWidth = Math.max(4, H / 150); ctx.stroke();
+    const text = `${key.endsWith('_l') ? 'L' : 'R'} ${Math.round(deg)}°`;
+    items.push({ text, bx: b.x, by: b.y, cx, w: ctx.measureText(text).width + 2 * pad, h: fs + 2 * pad, r });
+  }
+  layoutLabels(items, W, H).forEach(({ x, y }, i) => {
+    const it = items[i];
+    ctx.fillStyle = 'rgba(0,0,0,.75)'; ctx.fillRect(x, y, it.w, it.h);
+    ctx.strokeStyle = color; ctx.lineWidth = Math.max(2, H / 360); ctx.strokeRect(x, y, it.w, it.h);
+    ctx.fillStyle = '#fff'; ctx.textBaseline = 'top'; ctx.fillText(it.text, x + pad, y + pad * 1.1);
+  });
 }
 
 // Top-left tag so a screen recording or saved PNG always shows which angle mode produced the numbers.
@@ -105,12 +129,12 @@ export function drawBadge(ctx, H, text) {
 // Font size follows the short side so portrait clips do not get a giant box. Long names are cut with an ellipsis.
 // right = draw in the top-right corner (used when the player stands on the left half).
 export function drawCheckpoints(ctx, W, H, title, rows, right = false) {
-  const fs = Math.round(Math.min(W, H) / 34), pad = fs * 0.6, lh = fs * 1.55, dot = fs * 0.45;
+  const fs = Math.round(Math.min(W, H) / 51), pad = fs * 0.45, lh = fs * 1.4, dot = fs * 0.45;
   const font = (bold) => `${bold ? 700 : 400} ${fs}px "Segoe UI", sans-serif`;
   ctx.textBaseline = 'middle';
   const w = (t, bold) => { ctx.font = font(bold); return ctx.measureText(t).width; };
   const cut = (t, max) => { while (t.length > 1 && w(t, true) > max) t = t.slice(0, -2) + '…'; return t; };
-  const names = rows.map(r => cut(r.name, W * 0.4));
+  const names = rows.map(r => cut(r.name, W * 0.3));
   const nameW = Math.max(w(title, true) - dot * 3, ...names.map(n => w(n, true)));
   const valW = Math.max(0, ...rows.map(r => w(r.val, true) + (r.tgt ? w(' / ' + r.tgt, false) : 0)));
   const boxW = pad * 2 + dot * 3 + nameW + fs + valW, boxH = pad * 2 + lh * (rows.length + 1);
