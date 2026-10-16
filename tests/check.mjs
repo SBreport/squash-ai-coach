@@ -4,6 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { KEYS, angle, trunkLean, poseAngles, angle3, trunkLean3, poseAngles3, stanceRatio, frontSide, resolveMetric, checkpointValue, judge,
   detectEvents, medianSmooth, signalValue, fpsFromDeltas, strideFor } from '../app/angles.mjs';
 import { layoutLabels } from '../app/pose.mjs';
+import { METRICS, summarizeSession, diffSessions, withDiffs, recoveryHr } from '../app/history.mjs';
 import { COURT, T, COURT_POINTS, CORNERS, homography, applyH, invertH, calibrate, footPoint, courtPos, tOccupancy,
   cornerOf, detectExcursions, cornerAvg, slowestCorner, totalSec } from '../app/court.mjs';
 
@@ -281,6 +282,68 @@ near(T[0], COURT.width / 2); near(T[1], 5.44);
   assert.equal(tOccupancy([], 1).pct, null);
 }
 
+// ---- plain-language text of every checkpoint (shown in the panel) ----
+for (const c of cpFile.checkpoints) assert.ok(typeof c.plain === 'string' && c.plain.length > 5, `${c.id}: plain missing`);
+assert.equal(cpFile.checkpoints.find(c => c.id === 'lunge_front_knee').plain, '앞으로 내딛은 다리의 무릎이 얼마나 굽었나. 코치 기준 약 90도');
+
+// ---- history: summaries of exported bundles and the change versus the previous record ----
+{
+  const sdir = new URL('../sessions/2026-10-16-IMG_1224/', import.meta.url), rd = f => readFileSync(new URL(f, sdir), 'utf8');
+  // the real bundle has no events.json / court.json: events come from angles.csv (the same 7 moments as above)
+  const s = summarizeSession({ name: '2026-10-16-IMG_1224', meta: JSON.parse(rd('meta.json')), events: null, court: null, csv: rd('angles.csv') }, { auto_detect: AD });
+  assert.equal(s.date, '2026-10-16'); assert.equal(s.label, 'IMG_1224'); assert.equal(s.n_events, 7);
+  const frames = new Set([64, 308, 732, 848, 960, 1124, 1320]);
+  const kn = real.filter(r => frames.has(r.frame)).map(r => r.v);   // raw knee_min at the detected frames
+  assert.equal(kn.length, 7); near(s.knee_min_avg, kn.reduce((a, b) => a + b) / 7);
+  assert.ok(s.knee_min_avg > 100 && s.knee_min_avg < 170 && s.stance_avg > 0.3 && s.stance_avg < 4, `fixture values ${s.knee_min_avg} ${s.stance_avg}`);
+  assert.deepEqual([s.t_occ, s.ghost_total, s.slow_corner, s.hr_recovery], [null, null, null, null]); // no court.json -> no record
+  // with events.json and court.json (as the app exports them)
+  const full = summarizeSession({ name: '2026-10-20-ghost', meta: { label: 'ghost' }, events: [{ angles: { knee_l: 100, knee_r: 90, stance_ratio: 1.5 } }, { angles: { knee_l: 110, knee_r: null, stance_ratio: null } }],
+    court: { t_occupancy_pct: 41.2, total_sec: 42.5, excursions: [{}, {}], slowest_corner: 'back_left', corner_avg: { back_left: { n: 3, avg_sec: 2.4 } }, hr: { a: 150, b: 120, recovery: 30 } } });
+  assert.deepEqual([full.n_events, full.knee_min_avg, full.stance_avg, full.t_occ, full.ghost_total, full.slow_corner, full.slow_corner_name, full.hr_recovery], [2, 100, 1.5, 41.2, 42.5, 2.4, 'back_left', 30]);
+  assert.equal(summarizeSession({ name: 'x', court: { hr: { a: 130, b: 110 } } }).hr_recovery, 20); // recovery computed when only a/b are stored
+  assert.equal(summarizeSession({ name: 'x', events: [] }).knee_min_avg, null); // events.json with no detections
+}
+assert.equal(recoveryHr(150, 120), 30); assert.equal(recoveryHr('150', '120'), 30);
+assert.equal(recoveryHr(150, null), null); assert.equal(recoveryHr('', 120), null); assert.equal(recoveryHr(undefined, undefined), null);
+{
+  const D = (p, c) => Object.fromEntries(diffSessions(p, c, { kneeTarget: { min: 75, max: 105 } }).map(d => [d.key, d]));
+  const base = { knee_min_avg: 120, stance_avg: 2, t_occ: 30, ghost_total: 40, slow_corner: 3, hr_recovery: 20 };
+  let d = D(base, { knee_min_avg: 110, stance_avg: 2.12, t_occ: 33.2, ghost_total: 38.5, slow_corner: 3.4, hr_recovery: 24 });
+  assert.deepEqual([d.t_occ.text, d.t_occ.tone], ['+3.2%', 'good']);            // higher is better
+  assert.deepEqual([d.ghost_total.text, d.ghost_total.tone], ['-1.5초', 'good']); // lower is better
+  assert.deepEqual([d.slow_corner.text, d.slow_corner.tone], ['+0.40초', 'bad']);
+  assert.deepEqual([d.hr_recovery.text, d.hr_recovery.tone], ['+4 bpm', 'good']);
+  assert.deepEqual([d.stance_avg.text, d.stance_avg.tone], ['+0.12배', 'neutral']); // no direction
+  assert.deepEqual([d.knee_min_avg.text, d.knee_min_avg.tone], ['-10.0°', 'good']); // 120 -> 110 is closer to 75..105
+  d = D(base, { ...base, t_occ: 27, ghost_total: 44, hr_recovery: 15 });
+  assert.deepEqual([d.t_occ.tone, d.ghost_total.tone, d.hr_recovery.tone], ['bad', 'bad', 'bad']);
+  assert.equal(d.knee_min_avg.text, '변화 없음'); assert.equal(d.knee_min_avg.tone, 'neutral');
+  // knee: target range is the goal, not "smaller is better"
+  const knee = (p, c) => D({ knee_min_avg: p }, { knee_min_avg: c }).knee_min_avg;
+  assert.equal(knee(70, 85).tone, 'good');   // below the range -> inside
+  assert.equal(knee(100, 120).tone, 'bad');  // inside -> above
+  assert.equal(knee(120, 130).tone, 'bad');
+  assert.equal(knee(80, 100).tone, 'neutral'); // both inside the range
+  assert.equal(knee(90, 60).tone, 'bad'); assert.equal(knee(90, 60).text, '-30.0°');
+  // missing data
+  d = D(base, { knee_min_avg: 110 });
+  assert.deepEqual([d.t_occ.text, d.t_occ.tone, d.hr_recovery.text], ['기록 없음', 'none', '기록 없음']);
+  d = D(null, base); assert.deepEqual([d.t_occ.text, d.t_occ.tone], ['첫 기록', 'none']);
+  d = D({ t_occ: null }, { t_occ: 30 }); assert.equal(d.t_occ.text, '첫 기록');
+  // withDiffs: sorted by date, each metric compared with the nearest EARLIER session that has it
+  const list = withDiffs([{ name: '2026-10-22-c', date: '2026-10-22', t_occ: 35, ghost_total: 39 }, { name: '2026-10-15-a', date: '2026-10-15', t_occ: 30, ghost_total: null },
+    { name: '2026-10-18-b', date: '2026-10-18', t_occ: null, ghost_total: 41 }]);
+  assert.deepEqual(list.map(s => s.name), ['2026-10-15-a', '2026-10-18-b', '2026-10-22-c']);
+  const g = (s, k) => s.diffs.find(x => x.key === k);
+  assert.equal(g(list[0], 't_occ').text, '첫 기록');
+  assert.equal(g(list[1], 't_occ').text, '기록 없음');
+  assert.equal(g(list[2], 't_occ').text, '+5.0%');          // skips the middle session that has no value
+  assert.equal(g(list[2], 'ghost_total').text, '-2.0초');   // compared with 41, not with the null first session
+  assert.equal(g(list[1], 'ghost_total').text, '첫 기록');
+  assert.deepEqual(METRICS.map(m => m.key), ['knee_min_avg', 'stance_avg', 't_occ', 'ghost_total', 'slow_corner', 'hr_recovery']);
+}
+
 const dir = new URL('../docs/data/', import.meta.url);
 const need = {
   'project.json': ['title', 'question', 'start_date', 'tournament_date', 'rule', 'youtube_playlist', 'metrics'],
@@ -302,4 +365,4 @@ const project = JSON.parse(readFileSync(new URL('project.json', dir), 'utf8'));
 assert.equal(project.metrics.length, 5);
 for (const m of project.metrics) for (const k of ['id', 'name', 'unit', 'better']) assert.ok(k in m, `metric missing ${k}`);
 
-console.log(`check.mjs: ok (angles 2D/3D, checkpoints, auto detect, fps, overlay labels, court homography/T/excursions, ${files.length} data files)`);
+console.log(`check.mjs: ok (angles 2D/3D, checkpoints, auto detect, fps, overlay labels, court homography/T/excursions, history/diff/recovery HR, ${files.length} data files)`);
