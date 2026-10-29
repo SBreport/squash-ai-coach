@@ -65,7 +65,7 @@
   input.tl { width:100%; margin:0; padding:0; border:0; background:none; accent-color:var(--accent); cursor:pointer; }
   .ticks { position:absolute; left:0; right:0; top:0; height:8px; pointer-events:none; }
   .ticks i { position:absolute; top:0; width:3px; height:8px; margin-left:-1px; border-radius:1px; }
-  .ticks i.k { background:var(--accent); } .ticks i.v { background:#e67e22; } .ticks i.h { background:var(--p1); height:8px; } .ticks i.o { background:var(--bad); }
+  .ticks i.k { background:var(--accent); } .ticks i.v { background:#e67e22; } .ticks i.h { background:var(--p1); height:8px; } .ticks i.o { background:var(--bad); } .ticks i.b { background:#2ecc71; width:2px; }
   canvas.band { display:block; width:calc(100% - 16px); height:8px; margin:3px 8px 0; border-radius:3px; cursor:pointer; background:#2a313b; }
   .tltime { white-space:nowrap; min-width:112px; text-align:right; } #tlHint { white-space:nowrap; }
   #fsBar { display:none; position:absolute; left:10px; right:10px; bottom:40px; z-index:2; background:rgba(0,0,0,.55); border-radius:6px; padding:2px 10px 4px; }
@@ -295,7 +295,8 @@
 
     <section class="card" data-tabs="steps"><h2>이동 지도</h2>
       <div class="mrow"><svg id="map2" viewBox="-0.4 -0.4 7.2 10.55"></svg><div class="sub">점을 누르면 그 시간으로 이동합니다.<br>주황 원 = 코너 방문(번호 순).</div></div></section>
-    <section class="card" data-tabs="steps"><h2>방문 기록</h2><div id="visits" class="sub">코트를 맞추고 전체 분석을 하면 나옵니다.</div></section>
+    <section class="card" data-tabs="steps"><h2>신호음 인터벌</h2><div id="ivBox" class="sub">전체 분석을 하면 영상 소리에서 신호음을 찾습니다.</div></section>
+    <section class="card" id="visCard" data-tabs="steps"><h2>방문 기록</h2><div id="visits" class="sub">코트를 맞추고 전체 분석을 하면 나옵니다.</div></section>
     <section class="card" data-tabs="steps"><h2>회복 심박</h2>
       <div class="row" style="margin-top:0"><label>A 끝난 직후 <input type="number" id="hrA" min="30" max="250"></label><label>B 1분 뒤 <input type="number" id="hrB" min="30" max="250"></label></div>
       <div id="hrOut" class="sub" style="margin-top:6px"></div></section>
@@ -326,23 +327,25 @@
 <script type="module">
 import { KEYS, LABELS, checkpointValue, judge, resolveMetric, metricUnit, fmtMetric, roundMetric, metricDecimals,
   detectEvents, signalValue, medianSmooth, fpsFromDeltas, strideFor } from './angles.mjs';
-import { T, COURT_POINTS, CAL_ORDER, CAL_REQUIRED, CORNERS, CORNER_LABEL, calibrate, footPoint, courtPos, tOccupancy,
-  detectExcursions, cornerAvg, slowestCorner, totalSec, handsUp, detectHandsUp, drawCourtLines, drawCalPoints, courtSvg, calGuideSvg, ghostGuideSvg } from './court.mjs';
+import { T, COURT_POINTS, CAL_ORDER, CAL_REQUIRED, CORNERS, CORNER_LABEL, calibrate, footPoint, footPoints, courtPos, tOccupancy,
+  fillGaps, despike, outBackAvg, detectIntervals, summarizeIntervals, detectExcursions, cornerAvg, slowestCorner, totalSec, handsUp, detectHandsUp, drawCourtLines, drawCalPoints, courtSvg, calGuideSvg, ghostGuideSvg } from './court.mjs';
 import { MP_VERSION, COLORS, MODE_LABEL, loadPose, toPeople, personAngles, createTracker,
-  drawSkeleton, drawKnees, drawBadge, drawCheckpoints, loadSetting, saveSetting } from './pose.mjs';
+  drawSkeleton, drawKnees, drawBadge, drawCheckpoints, loadSetting, saveSetting, getImageLandmarker, cropRect, gridRects, cropScale, mapBack, mergePeople } from './pose.mjs';
 import { METRICS, summarizeSession, withDiffs, fmtValue, recoveryHr } from './history.mjs';
+import { decodeVideoAudio, findTones, segmentSets } from './audio.mjs';
 import { personHist, assignTracks, findOverlaps, applySwaps, posDist, IDENTITY_DEFAULTS } from './identity.mjs';
 
 const $ = id => document.getElementById(id);
 const video = $('video'), overlay = $('overlay'), ctx = overlay.getContext('2d'), stage = $('stage'), vbox = $('vbox');
 
-let landmarker = null, connections = [], lastTs = 0;
+let landmarker = null, connections = [], lastTs = 0, delegate = '';
 const tracker = createTracker();
 let persons = [null, null];
 let series = new Map(), analyzedStride = null, analyzedMode = null, analyzing = false, cancelled = false; // series: frame -> [나, 상대] (derived from raw + ident)
 let raw = new Map();                    // frame -> the people found in that frame, unordered (angles, foot, hands, c = hip centre, hist = clothes colour)
 let seed = null, swaps = [], ident = null, meSlot = 0, pickMode = false; // 나 clicked {t, pt}; swaps = overlap end times the user flipped; ident = {fs, frames, base, res, overlaps, ...}
-let captures = [], videoName = '', videoUrl = null;
+let captures = [], videoName = '', videoUrl = null, videoFile = null;
+let cue = null;                         // cue tones found in the video sound: {tones, sets, reason} (null = not searched yet)
 let cps = null;
 let events = [], probing = false, probeId = 0; // auto-detected knee-bend moments; fps probe state
 let fpsOk = false;                      // false until fps is auto-detected or chosen by the user (blocks the full analysis)
@@ -403,8 +406,8 @@ kvGet('dir').then(h => { if (h) $('dirName').textContent = h.name; });
 // ---- model ----
 (async () => {
   try {
-    ({ landmarker, connections } = await loadPose('VIDEO'));
-    status(`준비됨 (MediaPipe ${MP_VERSION})`);
+    ({ landmarker, connections, delegate } = await loadPose('VIDEO'));
+    status(`준비됨 (MediaPipe ${MP_VERSION}, ${delegate})`);
     if (video.readyState >= 2) { detect(); render(); }
   } catch (e) {
     status('모델을 불러오지 못했습니다: ' + e.message);
@@ -424,7 +427,7 @@ function openFile(file) {
   if (!file) return;
   if (videoUrl) URL.revokeObjectURL(videoUrl);
   probeId++; probing = false; fpsOk = false; $('fpsAuto').hidden = true; $('fpsBanner').hidden = true; // drop a probe still running for the previous file
-  videoName = file.name;
+  videoName = file.name; videoFile = file; cue = null;
   $('label').value = file.name.replace(/\.[^.]+$/, ''); // always the new file's name
   series = new Map(); raw = new Map(); ident = null; seed = null; swaps = []; meSlot = 0; pickMode = false; thumbs.clear(); analyzedStride = null; analyzedMode = null; captures = []; events = []; persons = [null, null]; tracker.reset(); marks.clear();
   clicks = []; cal = null; calMode = false; skipped = new Set(); calActs = []; calLimit = CAL_REQUIRED; savedCal = readSavedCal(file.name);
@@ -544,6 +547,41 @@ function detect() {
   // before: tracker slots (+ the slot the user picked)
   persons = (ident && ((list.length && matchLive(list)) || storedPersons(analyzedStride || 1))) || (meSlot ? [slots[1], slots[0]] : slots);
   return persons;
+}
+
+// Full-analysis detection: the main VIDEO pass, then (if fewer people than expected) ROI re-detect around people seen <= 1 s ago, then (expected 2 only) a 3x2 grid.
+// Small players are ~50 px in the detector's 224 px input, so crops are upscaled. Recovered people carry rec = 1.
+let recMem = [], recStat = { rec: 0, all: 0, ms: 0, calls: 0 };
+const cropCv = document.createElement('canvas'), cropCx = cropCv.getContext('2d');
+async function cropDetect(n, r, minShort, W, H) {
+  const il = await getImageLandmarker(n);
+  const k = cropScale(r, minShort);
+  cropCv.width = Math.round(r.w * k); cropCv.height = Math.round(r.h * k);
+  cropCx.drawImage(video, r.x, r.y, r.w, r.h, 0, 0, cropCv.width, cropCv.height);
+  const t0 = performance.now();
+  const res = toPeople(il.detect(cropCv)).map(p => ({ ...p, lm: mapBack(p.lm, r, W, H), rec: 1 }));
+  recStat.ms += performance.now() - t0; recStat.calls++;
+  return res;
+}
+async function detectFull() {
+  lastTs = Math.max(lastTs + 1, Math.round(performance.now()));
+  const W = video.videoWidth, H = video.videoHeight, t = video.currentTime, want = tab() === 'game' ? 2 : 1; // ponytail: expected count follows the tab; 2 only for the game tab
+  let list = mergePeople(toPeople(landmarker.detectForVideo(video, lastTs)), W, H);
+  if (list.length < want && W) {
+    const hip = p => [(p.lm[23].x + p.lm[24].x) / 2, (p.lm[23].y + p.lm[24].y) / 2];
+    for (const m of recMem) {
+      if (list.length >= want || t - m.t > 1) continue;
+      const h = hip(m);
+      if (list.some(p => Math.hypot((hip(p)[0] - h[0]) * W, (hip(p)[1] - h[1]) * H) < 0.08 * W)) continue;
+      list = mergePeople([...list, ...await cropDetect(1, cropRect(m.lm, W, H), 512, W, H)], W, H);
+    }
+    if (list.length < want && want === 2) // the grid on a 1-person video only duplicates the same player
+      for (const r of gridRects(W, H)) if (list.length < want) list = mergePeople([...list, ...await cropDetect(2, r, 800, W, H)], W, H);
+  }
+  list = list.slice(0, 2);
+  recMem = [...list.map(p => ({ lm: p.lm, t })), ...recMem.filter(m => !list.some(p => Math.hypot((p.lm[23].x - m.lm[23].x) * W, (p.lm[23].y - m.lm[23].y) * H) < 0.08 * W))].slice(0, 2);
+  recStat.all += list.length; recStat.rec += list.filter(p => p.rec).length;
+  return (persons = tracker.assign(list));
 }
 
 // ---- drawing: video overlay + the per-frame (live) parts of the panel ----
@@ -725,8 +763,9 @@ function renderTicks() {
   const v = cst.ex.map((e, i) => `<i class="v" style="${left(e.start_sec)}" title="고스팅 방문 ${i + 1} 시작"></i>`).join('');
   const h = cst.hu.map(x => `<i class="h" style="${left(x.start_sec)};width:max(3px, calc((100% - 16px) * ${(Math.max(0, x.end_sec - x.start_sec) / dur).toFixed(4)}))" title="만세 ${clock(x.start_sec)}~${clock(x.end_sec)}"></i>`).join('');
   const ov = (ident?.overlaps || []).map(x => `<i class="o" style="${left(x.start_t)}" title="두 사람 겹침 ${clock(x.start_t)}~${clock(x.end_t)}"></i>`).join('');
-  document.querySelectorAll('.ticks').forEach(el => { el.innerHTML = k + v + h + ov; });
-  const kinds = [events.length && '노랑 무릎 굽힘', cst.ex.length && '주황 방문 시작', cst.hu.length && '파랑 만세', ident?.overlaps.length && '빨강 두 사람 겹침'].filter(Boolean);
+  const bp = (cue?.tones || []).map(x => `<i class="b" style="${left(x.t_sec)}" title="신호음 ${x.kind === 'call' ? CORNER_LABEL[x.corner] : x.kind === 'set_start' ? '세트 시작' : '세트 끝'}"></i>`).join('');
+  document.querySelectorAll('.ticks').forEach(el => { el.innerHTML = k + v + h + ov + bp; });
+  const kinds = [events.length && '노랑 무릎 굽힘', cst.ex.length && '주황 방문 시작', cst.hu.length && '파랑 만세', ident?.overlaps.length && '빨강 두 사람 겹침', cue?.tones.length && '초록 신호음'].filter(Boolean);
   $('tlHint').textContent = kinds.length ? '눈금: ' + kinds.join(' · ') : '';
 }
 
@@ -749,26 +788,37 @@ $('analyze').onclick = async () => {
   if (!fpsOk) return status('영상의 fps를 먼저 골라 주세요.');
   const stride = Math.max(1, Number($('stride').value) || 2), n = total();
   analyzing = true; cancelled = false; video.pause(); updateAnalyze();
-  series = new Map(); raw = new Map(); ident = null; swaps = []; tracker.reset(); analyzedStride = stride; analyzedMode = mode();
+  series = new Map(); raw = new Map(); ident = null; swaps = []; tracker.reset(); recMem = []; recStat = { rec: 0, all: 0, ms: 0, calls: 0 }; cue = null; analyzedStride = stride; analyzedMode = mode();
   events = []; captures = captures.filter(c => !c.auto); renderEvents(); // a new analysis replaces the previous auto results
   $('prog').hidden = $('cancel').hidden = false; $('mode').disabled = true;
   for (let f = 0; f < n && !cancelled; f += stride) {
     await seekFrame(f);
-    const ps = detect(); render();
+    const ps = await detectFull(); render();
     const img = ps.some(Boolean) ? frameImage() : null, es = ps.map(p => p ? entry(p, img) : null);
     raw.set(f, es.filter(Boolean)); series.set(f, es); // raw: who is who is decided after the loop (buildIdentity); series is a provisional per-tracker-slot copy for the live chart
     $('prog').value = f / n;
     if (f % (stride * 10) === 0) drawChart();
   }
   buildIdentity();
+  if (!cancelled && tab() === 'steps') await findCue();
   if (!cancelled) await autoDetect(tab() === 'pose'); // pictures of the knee-bend moments only in 자세 조정 (45 seeks + PNGs took over a minute)
   analyzing = false; updateAnalyze();
   $('prog').hidden = $('cancel').hidden = true; $('mode').disabled = false;
-  status(`${cancelled ? '분석 취소됨' : '분석 완료'}: ${series.size}개 프레임 (${MODE_LABEL[analyzedMode]})${events.length ? ` · 무릎 굽힘 ${events.length}회 감지` : ''}`);
+  if (recStat.calls) console.info(`복구 검출 ${recStat.calls}회, 평균 ${(recStat.ms / recStat.calls).toFixed(1)} ms (${delegate})`);
+  status(`${cancelled ? '분석 취소됨' : '분석 완료'}: ${series.size}개 프레임 (${MODE_LABEL[analyzedMode]}) · 복구 검출 ${recStat.all ? Math.round(100 * recStat.rec / recStat.all) : 0}% (${recStat.rec}/${recStat.all})${events.length ? ` · 무릎 굽힘 ${events.length}회 감지` : ''}`);
   renderCaptures();
   refreshData();
   if (events.length && tab() === 'pose') await seekFrame(events[0].frame);
 };
+
+// Cue tones in the video's sound (steps tab only): >= 1 set found -> interval mode, else the 18-visit test.
+async function findCue() {
+  status('영상 소리에서 신호음을 찾는 중입니다…');
+  const a = videoFile ? await decodeVideoAudio(videoFile) : { samples: null, reason: '영상 파일이 없습니다' };
+  if (!a.samples) return void (cue = { tones: [], sets: [], reason: a.reason });
+  const tones = findTones(a.samples, a.sampleRate);
+  cue = { tones, sets: segmentSets(tones), reason: '' };
+}
 
 // ---- who is 나: stored people per frame -> assignTracks (position + clothes colour) -> overlaps -> series ----
 const sampler = document.createElement('canvas'), sctx = sampler.getContext('2d', { willReadFrequently: true });
@@ -781,7 +831,7 @@ function frameImage() {
 }
 const hipC = p => [(p.lm[23].x + p.lm[24].x) / 2, (p.lm[23].y + p.lm[24].y) / 2];
 // foot: pixel point under the player; hands: both wrists above the nose; c, hist: for who-is-who; lmc, wlc: the landmarks (packed) so the skeleton of an analysed frame can be shown without detecting again
-const entry = (p, img) => ({ ...angles(p), foot: footPoint(p.lm, overlay.width, overlay.height), hands: handsUp(p.lm), c: hipC(p), hist: img ? personHist(img, p.lm, 0.3) : null,
+const entry = (p, img) => ({ ...angles(p), foot: footPoint(p.lm, overlay.width, overlay.height), feet: footPoints(p.lm, overlay.width, overlay.height), hands: handsUp(p.lm), c: hipC(p), hist: img ? personHist(img, p.lm, 0.3) : null, rec: p.rec || 0,
   lmc: Float32Array.from(p.lm.flatMap(q => [q.x, q.y, q.z ?? 0, q.visibility ?? 1])), wlc: p.wl ? Float32Array.from(p.wl.flatMap(q => [q.x, q.y, q.z])) : null });
 const unpack = e => ({ lm: Array.from({ length: e.lmc.length / 4 }, (_, i) => ({ x: e.lmc[4 * i], y: e.lmc[4 * i + 1], z: e.lmc[4 * i + 2], visibility: e.lmc[4 * i + 3] })),
   wl: e.wlc ? Array.from({ length: e.wlc.length / 3 }, (_, i) => ({ x: e.wlc[3 * i], y: e.wlc[3 * i + 1], z: e.wlc[3 * i + 2] })) : null });
@@ -928,7 +978,7 @@ new ResizeObserver(() => { if (tab() === 'pose') drawChart(); else if (tab() ===
 // ---- court: calibration (click floor marks -> homography), T occupancy, corner visits ----
 // The pixel point under the player is stored per analysed frame (series[..].foot); court metres are derived from the
 // calibration whenever needed, so the court can be set before or after the full analysis.
-const courtCfg = () => ({ t_radius_m: 1, away_m: 1.5, min_away_sec: 0.3, hands_up_min_sec: 0.3, hands_up_knee_min: 150, ...cps?.court });
+const courtCfg = () => ({ t_radius_m: 1, away_m: 1.5, min_away_sec: 0.3, hands_up_min_sec: 0.3, hands_up_knee_min: 150, move_m: 0.3, gap_fill_sec: 0.5, ...cps?.court });
 const readSavedCal = name => { try { return JSON.parse(loadSetting('court_' + name, 'null')); } catch { return null; } };
 function setClicks(list, save = true) {
   clicks = list; cal = list.length >= 4 ? calibrate(list) : null;
@@ -990,21 +1040,23 @@ stage.addEventListener('click', e => {
 // Positions of the selected person on the court for every analysed frame + everything derived from them.
 function courtStats() {
   const s = sel(), o = courtCfg(), frames = [...series.keys()].sort((a, b) => a - b);
-  const track = cal && series.size ? frames.map(f => ({ frame: f, t: f / fps(), p: courtPos(cal.H, series.get(f)[s]?.foot) })) : [];
+  const track = cal && series.size ? frames.map(fr => { const e = series.get(fr)[s]; return { frame: fr, t: fr / fps(), p: courtPos(cal.H, e?.foot), f: (e?.feet || []).map(q => q && courtPos(cal.H, q)) }; }) : [];
+  const filled = fillGaps(track, o.gap_fill_sec); // holes <= gap_fill_sec are bridged for visits and calls; T occupancy and the maps use the raw track
   // Signals: hands up while standing straight (both knees >= hands_up_knee_min). The knee check drops deep front-corner lunges,
   // where the head drops below the wrists (IMG_1222 9 s was read as a hands-up). First span END = test start; a later span's
   // START = test end (the player raises the arms again at T after the last lap). Visits are counted between the two.
   const up = a => a?.hands == null ? null : a.hands && a.knee_l >= o.hands_up_knee_min && a.knee_r >= o.hands_up_knee_min;
   const hu = detectHandsUp(frames.map(f => ({ t: f / fps(), up: up(series.get(f)[s]) })), o);
   const start = hu.length ? hu[0].end_sec : null, end = hu.length > 1 ? hu[hu.length - 1].start_sec : null;
-  const ex = detectExcursions(track.filter(q => (start == null || q.t >= start) && (end == null || q.t <= end)), T, o), avg = cornerAvg(ex);
-  return { track, o, occ: tOccupancy(track, o.t_radius_m), ex, avg, slow: slowestCorner(avg), hu, start, end,
+  const ex = detectExcursions(filled.filter(q => (start == null || q.t >= start) && (end == null || q.t <= end)), T, o), avg = cornerAvg(ex);
+  const iv = cal && cue?.sets.length ? detectIntervals(despike(filled), cue.sets, T, o) : null;
+  return { track, o, occ: tOccupancy(track, o.t_radius_m), ex, avg, slow: slowestCorner(avg), hu, start, end, ob: outBackAvg(ex), iv, ivs: iv && summarizeIntervals(iv),
     total: start != null && ex.length ? ex[ex.length - 1].return_sec - start : totalSec(ex) };
 }
 // Everything that depends on the analysis result, the court or the selected person. Not per video frame.
 function refreshData() {
   cst = courtStats(); courtTrackNow = cst.track;
-  renderSummary(); renderEvents(); renderCal(); renderMaps(); renderVisits(); renderHr(); renderReco(); renderTicks(); renderIdentity(); drawBand();
+  renderSummary(); renderEvents(); renderCal(); renderMaps(); renderVisits(); renderIntervals(); renderHr(); renderReco(); renderTicks(); renderIdentity(); drawBand();
   drawChart(); drawBars(); render();
 }
 
@@ -1026,6 +1078,12 @@ function renderSummary() {
       stat('겹침 구간', ident ? ident.overlaps.length + '곳' : '-', ident ? '오른쪽 목록에서 확인' : '');
     note = !cal ? '아래에서 코트 맞추기를 먼저 하세요.' : !series.size ? '전체 분석을 하면 나옵니다.'
       : ok ? `나 기준입니다. T에서 ${o.t_radius_m}m 안에 있던 시간의 비율이고, 랠리 사이 쉬는 시간도 들어갑니다.` : '코트 안에서 잡힌 위치가 없습니다. 코트 맞춤을 확인하세요.';
+  } else if (t === 'steps' && st.ivs) {
+    const v = st.ivs, d = v.drop_off_pct, sec = x => x == null ? '-' : x.toFixed(2) + '초';
+    h = stat('세트', v.sets + '개', `호출 ${v.calls}번`) + stat('총 횟수', v.reps + '회', v.missed ? `<span class="bad">못 움직인 호출 ${v.missed}번</span>` : '코너를 찍고 돌아온 횟수') +
+      stat('평균 반응 시간', sec(v.reaction), '신호음 → 움직이기 시작') + stat('평균 복귀 시간', sec(v.back), '코너를 찍고 → T로 돌아오기') +
+      stat('속도 저하', d == null ? '-' : (d > 0 ? '+' : '') + d.toFixed(1) + '%', d == null ? '' : d > 0 ? '+ = 뒤로 갈수록 느려짐' : '- = 뒤로 갈수록 빨라짐', 'hl');
+    note = '나 기준입니다. 신호음(휴대폰)에서 찾은 시각을 기준으로 잰 값입니다.';
   } else if (t === 'steps') {
     const n = st.ex.length, slow = st.slow;
     h = stat('고스팅 총시간', ok && st.total != null ? st.total.toFixed(1) + '초' : '-', st.start != null ? `시작: 만세 ${clock(st.start)}` + (st.end != null ? ` · 끝: 만세 ${clock(st.end)}` : '') : series.size ? '<span class="bad">시작 신호(만세) 못 찾음</span> · 첫 이탈~마지막 복귀' : '만세 끝~마지막 복귀') +
@@ -1067,13 +1125,33 @@ function renderMaps() {
   updateCursor();
 }
 function renderVisits() {
+  $('visCard').style.display = cst.iv ? 'none' : ''; // interval mode: the 18-visit record would only confuse
   const st = cst, o = st.o, ok = cal && series.size && st.occ.valid, sec = x => x.toFixed(2);
   if (!ok) return setHtml('visits', '<span class="sub">코트를 맞추고 전체 분석을 하면 나옵니다.</span>');
   const n = st.ex.length;
   setHtml('visits', !n ? `<span class="sub">T에서 ${o.away_m}m 넘게 나갔다가 돌아온 구간이 없습니다.</span>`
-    : '<table class="t"><tr><th>#</th><th class="l">코너</th><th>나감</th><th>가장 먼 점</th><th>복귀</th><th>걸린 시간</th></tr>' +
-      st.ex.map((e, i) => `<tr data-f="${Math.round(e.far_sec * fps())}"><td>${i + 1}</td><td class="l">${CORNER_LABEL[e.corner]}</td><td>${sec(e.start_sec)}</td><td>${sec(e.far_sec)}</td><td>${sec(e.return_sec)}</td><td class="n">${sec(e.duration_sec)}초</td></tr>`).join('') + '</table>');
+    : '<table class="t"><tr><th>#</th><th class="l">코너</th><th>나감</th><th>가장 먼 점</th><th>복귀</th><th>가는 시간</th><th>오는 시간</th><th>걸린 시간</th></tr>' +
+      st.ex.map((e, i) => `<tr data-f="${Math.round(e.far_sec * fps())}"><td>${i + 1}</td><td class="l">${CORNER_LABEL[e.corner]}</td><td>${sec(e.start_sec)}</td><td>${sec(e.far_sec)}</td><td>${sec(e.return_sec)}</td><td>${sec(e.out_sec)}</td><td>${sec(e.back_sec)}</td><td class="n">${sec(e.duration_sec)}초</td></tr>`).join('') +
+      `<tr><td></td><td class="l">평균</td><td></td><td></td><td></td><td>${sec(st.ob.out)}</td><td>${sec(st.ob.back)}</td><td></td></tr></table>`);
 }
+const CUE_URL = 'https://sbreport.github.io/squash-ai-coach/cue.html';
+function renderIntervals() {
+  const st = cst, sec = x => x == null ? '-' : x.toFixed(2), pct = x => x == null ? '-' : Math.round(x) + '%';
+  if (!st.iv) {
+    const msg = !series.size ? '전체 분석을 하면 영상 소리에서 신호음을 찾습니다.' : !cue ? '신호음은 [스텝·체력] 탭에서 전체 분석을 할 때 찾습니다.'
+      : cue.reason ? `영상 소리를 읽지 못했습니다 (${esc(cue.reason)}).` : cue.sets.length ? '코트를 맞추면 결과가 나옵니다.' : '영상에서 신호음 세트를 찾지 못했습니다. 기존 18회 테스트 방식으로 계산했습니다.';
+    return setHtml('ivBox', `<div>${msg}</div><div style="margin-top:6px">인터벌 훈련(코너를 무작위로 불러 주는 신호음)을 하려면 휴대폰으로 이 페이지를 열고, 뒷벽 쪽에 두고 영상을 찍으세요:<br><a href="${CUE_URL}" target="_blank" rel="noopener">${CUE_URL}</a></div>`);
+  }
+  const sets = st.iv, call = c => `<tr data-f="${Math.round((c.touch_sec ?? c.t_sec) * fps())}"><td>${esc(clock(c.t_sec))}</td><td class="l">${CORNER_LABEL[c.corner]}</td>` +
+    (c.status === 'missed' ? '<td colspan="6" class="l bad">못 움직임</td>' : c.status === 'short' ? `<td>${sec(c.reaction_sec)}</td><td colspan="5" class="l bad">T에서 ${st.o.away_m}m까지 못 나감</td>`
+      : `<td>${sec(c.reaction_sec)}</td><td>${sec(c.out_sec)}</td><td>${sec(c.back_sec)}${c.returned ? '' : '*'}</td><td class="n">${sec(c.rep_sec)}</td><td class="l">${CORNER_LABEL[c.touch_corner]}</td><td class="${c.corner_ok ? 'good' : 'bad'}">${c.corner_ok ? '맞음' : '다름'}</td>`) + '</tr>';
+  setHtml('ivBox', '<table class="t"><tr><th>세트</th><th>호출</th><th>횟수</th><th>반응</th><th>가는</th><th>오는</th><th>한 번에</th><th>코너 맞춤</th></tr>' +
+    sets.map((x, i) => `<tr data-f="${Math.round(x.start_sec * fps())}"><td>${i + 1}</td><td>${x.n_calls}</td><td>${x.reps}</td><td>${sec(x.reaction)}</td><td>${sec(x.out)}</td><td>${sec(x.back)}</td><td class="n">${sec(x.rep)}</td><td>${pct(x.corner_pct)}</td></tr>`).join('') + '</table>' +
+    '<div class="sub" style="margin:6px 0 2px">호출별 (초). 누르면 그 장면으로 이동. * = 다음 신호음 때문에 끊긴 복귀</div>' +
+    '<div style="max-height:260px;overflow-y:auto"><table class="t"><tr><th>신호음</th><th class="l">부른 코너</th><th>반응</th><th>가는</th><th>오는</th><th>한 번에</th><th class="l">찍은 곳</th><th></th></tr>' +
+    sets.map((x, i) => `<tr><td colspan="8" class="l sub">세트 ${i + 1}</td></tr>` + x.calls.map(call).join('')).join('') + '</table></div>');
+}
+$('ivBox').onclick = e => { const r = e.target.closest('tr[data-f]'); if (r) seekCourt(Number(r.dataset.f)); };
 const seekCourt = f => { if (video.duration && !analyzing && !probing) { video.pause(); seekFrame(f); } };
 $('visits').onclick = e => { const r = e.target.closest('tr[data-f]'); if (r) seekCourt(Number(r.dataset.f)); };
 function mapClick(svg) {
@@ -1275,7 +1353,7 @@ $('export').onclick = async () => {
   const meta = { video_name: videoName, label, fps: fps(), stride: analyzedStride, width: video.videoWidth, height: video.videoHeight,
     duration_sec: Math.round(video.duration * 1000) / 1000, frames_total: total(), created_at: now.toISOString(), mediapipe_version: MP_VERSION,
     checkpoints_version: cps?.version ?? null, handedness: hand(), angle_mode: analyzedMode || mode(), auto_detect: cps?.auto_detect ?? null,
-    court: calMeta(), hr: hrData(), identity: { seed: seed ? { t: r3(seed.t), pt: seed.pt.map(x => Math.round(x * 10000) / 10000) } : null, swaps, auto_seed: ident ? ident.seedAuto : null } };
+    court: calMeta(), hr: hrData(), intervals: intervalsJson(false), identity: { seed: seed ? { t: r3(seed.t), pt: seed.pt.map(x => Math.round(x * 10000) / 10000) } : null, swaps, auto_seed: ident ? ident.seedAuto : null } };
   const files = [
     ['meta.json', JSON.stringify(meta, null, 2)],
     ['angles.csv', anglesCsv()],
@@ -1309,13 +1387,23 @@ $('export').onclick = async () => {
 };
 // calibration for meta.json / court.json: points {name, px, m}, H = 3x3 row-major, pixels -> court metres
 const calMeta = () => cal ? { points: cal.points.map(q => ({ name: q.name, px: q.px.map(x => Math.round(x * 10) / 10), m: q.m })), H: cal.H, reproj_px: Math.round(cal.reproj_px * 100) / 100 } : null;
+// Interval results for meta.json (full = false: sets and summary only) and court.json (full = true: with every call). null when no cue sets were found.
+function intervalsJson(full) {
+  const st = cst || courtStats();
+  if (!st.iv) return null;
+  const r3 = x => x == null ? null : Math.round(x * 1000) / 1000, r2 = x => Math.round(x * 100) / 100, o = st.o;
+  const call = c => ({ t_sec: r3(c.t_sec), corner: c.corner, status: c.status, reaction_sec: r3(c.reaction_sec), start_sec: r3(c.start_sec), touch_sec: r3(c.touch_sec), return_sec: r3(c.return_sec), out_sec: r3(c.out_sec),
+    back_sec: r3(c.back_sec), rep_sec: r3(c.rep_sec), returned: c.returned ?? null, touch_corner: c.touch_corner ?? null, touch_m: c.touch_m ? c.touch_m.map(r2) : null, corner_ok: c.corner_ok ?? null });
+  return { move_m: o.move_m, gap_fill_sec: o.gap_fill_sec, summary: Object.fromEntries(Object.entries(st.ivs).map(([k, v]) => [k, r3(v)])),
+    sets: st.iv.map(x => ({ start_sec: r3(x.start_sec), end_sec: r3(x.end_sec), n_calls: x.n_calls, reps: x.reps, reaction: r3(x.reaction), out: r3(x.out), back: r3(x.back), rep: r3(x.rep), corner_pct: r3(x.corner_pct), ...(full ? { calls: x.calls.map(call) } : {}) })) };
+}
 function courtJson() {
   const st = courtStats(), r2 = x => Math.round(x * 100) / 100, r3 = x => Math.round(x * 1000) / 1000;
   return { calibration: calMeta(), person: sel() + 1, t_occupancy_pct: st.occ.pct == null ? null : Math.round(st.occ.pct * 10) / 10,
     t_radius_m: st.o.t_radius_m, away_m: st.o.away_m, min_away_sec: st.o.min_away_sec, hands_up_min_sec: st.o.hands_up_min_sec,
-    excursions: st.ex.map(e => ({ start_sec: r3(e.start_sec), far_sec: r3(e.far_sec), return_sec: r3(e.return_sec), duration_sec: r3(e.duration_sec), corner: e.corner, far_m: e.far_m.map(r2), far_dist_m: r2(e.far_dist_m) })),
+    excursions: st.ex.map(e => ({ start_sec: r3(e.start_sec), far_sec: r3(e.far_sec), return_sec: r3(e.return_sec), duration_sec: r3(e.duration_sec), out_sec: r3(e.out_sec), back_sec: r3(e.back_sec), corner: e.corner, far_m: e.far_m.map(r2), far_dist_m: r2(e.far_dist_m) })),
     corner_avg: Object.fromEntries(CORNERS.map(c => [c, { n: st.avg[c].n, avg_sec: st.avg[c].n ? r3(st.avg[c].avg_sec) : null }])),
-    slowest_corner: st.slow, total_sec: st.total == null ? null : r3(st.total), start_signal: st.start == null ? null : { type: 'hands_up', sec: r3(st.start) }, end_signal: st.end == null ? null : { type: 'hands_up', sec: r3(st.end) }, hr: hrData() };
+    intervals: intervalsJson(true), slowest_corner: st.slow, total_sec: st.total == null ? null : r3(st.total), start_signal: st.start == null ? null : { type: 'hands_up', sec: r3(st.start) }, end_signal: st.end == null ? null : { type: 'hands_up', sec: r3(st.end) }, hr: hrData() };
 }
 // court_x,court_y in metres (2 decimals); empty without calibration or when the player is off court
 const courtCsv = a => { const m = cal && a.foot ? courtPos(cal.H, a.foot) : null; return m ? m[0].toFixed(2) + ',' + m[1].toFixed(2) : ','; };

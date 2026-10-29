@@ -122,13 +122,16 @@ export function calibrate(clicks) {
 
 // ---- player position on the floor ----
 
-// Pixel point under the player: for each foot the heel (29/30) if visible, else the ankle (27/28); mean of the feet
-// that have one. null if no foot is visible. lm = normalized landmarks.
-export function footPoint(lm, W, H, minVis = 0.5) {
+// Pixel point under each foot [left, right] (landmarks 29/27 and 30/28): the heel if visible, else the ankle; null for a foot
+// that is not visible. lm = normalized landmarks.
+export function footPoints(lm, W, H, minVis = 0.5) {
   const ok = i => lm[i] && (lm[i].visibility ?? 1) >= minVis;
-  const feet = [[29, 27], [30, 28]].map(([heel, ankle]) => ok(heel) ? heel : ok(ankle) ? ankle : null).filter(i => i != null);
-  if (!feet.length) return null;
-  return [feet.reduce((s, i) => s + lm[i].x, 0) / feet.length * W, feet.reduce((s, i) => s + lm[i].y, 0) / feet.length * H];
+  return [[29, 27], [30, 28]].map(([heel, ankle]) => { const i = ok(heel) ? heel : ok(ankle) ? ankle : null; return i == null ? null : [lm[i].x * W, lm[i].y * H]; });
+}
+// Pixel point under the player: mean of the visible feet. null if no foot is visible.
+export function footPoint(lm, W, H, minVis = 0.5) {
+  const f = footPoints(lm, W, H, minVis).filter(Boolean);
+  return f.length ? [f.reduce((s, q) => s + q[0], 0) / f.length, f.reduce((s, q) => s + q[1], 0) / f.length] : null;
 }
 
 // Pixel foot point -> court metres, or null if there is no calibration/foot or the spot is more than `margin` m
@@ -165,29 +168,79 @@ export function cornerOf(p) {
   return `${row}_${p[0] < COURT.tX ? 'left' : 'right'}`;
 }
 
+// Short position gaps: samples without a position between two samples that have one are filled by linear interpolation when
+// the two known samples are at most maxSec apart (a longer hole stays empty). Interpolated samples carry `interp: true`; their
+// per-foot points f are interpolated too when both ends have that foot. track: [{t, p, f?}] -> new array.
+// ponytail: straight line between the two ends; a fast turn inside a 0.5 s hole is cut short (detectExcursions then sees a smaller far point).
+export function fillGaps(track, maxSec = 0.5) {
+  const out = track.map(s => ({ ...s }));
+  let a = -1; // index of the last sample with a position
+  for (let i = 0; i < out.length; i++) {
+    if (!out[i].p) continue;
+    if (a >= 0 && i - a > 1 && out[i].t - out[a].t <= maxSec + 1e-9) for (let j = a + 1; j < i; j++) {
+      const k = (out[j].t - out[a].t) / (out[i].t - out[a].t), lerp = (u, v) => [u[0] + (v[0] - u[0]) * k, u[1] + (v[1] - u[1]) * k];
+      out[j].p = lerp(out[a].p, out[i].p); out[j].interp = true;
+      out[j].f = [0, 1].map(n => out[a].f?.[n] && out[i].f?.[n] ? lerp(out[a].f[n], out[i].f[n]) : null);
+    }
+    a = i;
+  }
+  return out;
+}
+
+// 3-sample median of each position (and each foot) over neighbours that all have one: a single-frame jump (a bad foot detection
+// 4 m away, seen on IMG_1222) disappears, steady movement is unchanged. Used for the call analysis only. track: [{t, p, f?}] -> new array.
+// ponytail: only 1-sample spikes are removed; a 2-sample glitch needs a wider window (and blurs real turns more).
+export function despike(track) {
+  const med = (a, b, c) => Math.max(Math.min(a, b), Math.min(Math.max(a, b), c));
+  const m3 = (u, v, w) => u && v && w ? [med(u[0], v[0], w[0]), med(u[1], v[1], w[1])] : v;
+  return track.map((s, i) => {
+    const a = track[i - 1], c = track[i + 1];
+    if (!a || !c || !s.p) return s;
+    return { ...s, p: m3(a.p, s.p, c.p), f: s.f ? s.f.map((q, n) => m3(a.f?.[n], q, c.f?.[n])) : s.f };
+  });
+}
+
+// The point that counts as the touch at a sample: the foot farthest from T (the lead foot in a lunge); s.p if there are no feet.
+const reachOf = (s, t) => (s.f || []).filter(Boolean).reduce((b, q) => !b || dist(q, t) > dist(b, t) ? q : b, null) || s.p;
+const median = a => { const v = [...a].sort((x, y) => x - y), m = v.length >> 1; return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2; };
+// 5-point median of the mean position over the samples that have one (null where the sample has none).
+const smoothP = a => a.map((_, i) => { const w = a.slice(Math.max(0, i - 2), i + 3).filter(q => q.p); return w.length ? [median(w.map(q => q.p[0])), median(w.map(q => q.p[1]))] : null; });
+
+// Touch of one outward trip. samples: [{t, p, f?}] from leaving T to coming back. The touch TIME is when the 5-point-median mean
+// position (what T occupancy uses) is farthest from T: a lifted foot in a lunge projects far beyond the floor spot for a frame or two
+// and must not move the time. The touch POINT (and so the corner) = coordinate-wise median of the lead-foot (farthest foot) positions
+// within +-0.2 s of that time. -> {t, pt, d (pt distance from T)}.
+// ponytail: fixed 0.2 s window; with a very large analysis stride the window holds one sample and the median is that sample.
+export function touchOf(samples, t, win = 0.2) {
+  const sm = smoothP(samples);
+  let bi = -1, bd = -1;
+  sm.forEach((q, i) => { if (q && dist(q, t) > bd) { bd = dist(q, t); bi = i; } });
+  if (bi < 0) return null;
+  const t0 = samples[bi].t, pts = samples.filter(s => s.p && Math.abs(s.t - t0) <= win + 1e-9).map(s => reachOf(s, t));
+  const pt = [median(pts.map(q => q[0])), median(pts.map(q => q[1]))];
+  return { t: t0, pt, d: dist(pt, t) };
+}
+
 // Corner visits ("ghosting"): the player is at T (within t_radius_m), goes farther than away_m, and comes back within
 // t_radius_m. start = first sample outside t_radius_m after being at T, far = the sample farthest from T, return = first
 // sample back inside t_radius_m. Visits shorter than min_away_sec (start -> return) are tracking noise and dropped; a visit
 // that never returns, or a track that starts away from T, is not counted. Samples with no position are skipped.
-// track: [{t, p}]; o: {t_radius_m, away_m, min_away_sec}.
-// Returns [{start_sec, far_sec, return_sec, duration_sec, corner, far_m, far_dist_m}].
+// Leaving/returning use the position p; the touch time/point come from touchOf (smoothed mean position for the time, lead foot for the point).
+// track: [{t, p, f?}]; o: {t_radius_m, away_m, min_away_sec}.
+// Returns [{start_sec, far_sec, return_sec, duration_sec, out_sec (start -> far), back_sec (far -> return), corner, far_m, far_dist_m}].
 export function detectExcursions(track, t, o) {
   const out = [];
-  let home = false, leave = null, cur = null;
+  let home = false, run = [], far = false;
   for (const s of track) {
     if (!s.p) continue;
     const d = dist(s.p, t);
     if (d <= o.t_radius_m) {
-      if (cur && s.t - cur.start.t >= o.min_away_sec - 1e-9) out.push({
-        start_sec: cur.start.t, far_sec: cur.far.t, return_sec: s.t, duration_sec: s.t - cur.start.t,
-        corner: cornerOf(cur.far.p), far_m: cur.far.p, far_dist_m: cur.fd,
-      });
-      home = true; leave = null; cur = null;
-    } else {
-      if (home && !leave) leave = s;
-      if (leave && !cur && d > o.away_m) cur = { start: leave, far: s, fd: d };
-      if (cur && d > cur.fd) { cur.far = s; cur.fd = d; }
-    }
+      if (home && far && s.t - run[0].t >= o.min_away_sec - 1e-9) {
+        const k = touchOf(run, t), st = run[0].t;
+        out.push({ start_sec: st, far_sec: k.t, return_sec: s.t, duration_sec: s.t - st, out_sec: k.t - st, back_sec: s.t - k.t, corner: cornerOf(k.pt), far_m: k.pt, far_dist_m: k.d });
+      }
+      home = true; run = []; far = false;
+    } else if (home) { run.push(s); if (d > o.away_m) far = true; }
   }
   return out;
 }
@@ -226,11 +279,86 @@ export function cornerAvg(ex) {
   }));
 }
 
+// Mean of the numbers in a list (null if empty).
+const meanOf = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+// Mean out_sec / back_sec over visits -> {out, back} (null if no visits).
+export const outBackAvg = ex => ({ out: meanOf(ex.map(e => e.out_sec)), back: meanOf(ex.map(e => e.back_sec)) });
+
 // The slowest corner (largest mean duration) or null if there are no visits.
 export const slowestCorner = avg => CORNERS.filter(c => avg[c].n).reduce((p, c) => p == null || avg[c].avg_sec > avg[p].avg_sec ? c : p, null);
 
 // Seconds from the first departure to the last return, null if no visits.
 export const totalSec = ex => ex.length ? ex[ex.length - 1].return_sec - ex[0].start_sec : null;
+
+// ---- interval sets with cue tones (calls come from app/audio.mjs segmentSets) ----
+
+// One call -> {t_sec, corner, status: 'ok'|'short'|'missed', reaction_sec, start_sec, touch_sec, return_sec, out_sec, back_sec, rep_sec, returned, touch_m, touch_corner, corner_ok}.
+// Window = beep -> next call (or the set end). missed = the player never moved move_m from where they stood at the beep (the spot counts as moved to any later spot closer to T, so arriving home is not a start).
+// start = first sample after the beep that is move_m away from that spot (see below); touch = touchOf (same rule as the visits) from the start on;
+// return = first sample after the touch back within t_radius_m, or the next call if that comes first (returned = false).
+// short = moved but never farther than away_m from T (no touch). rep_sec = beep -> return.
+// track: [{t, p, f?}] (use fillGaps first); o: {t_radius_m, away_m, move_m}.
+export function detectCall(track, call, tEnd, t, o) {
+  const base = { t_sec: call.t_sec, corner: call.corner };
+  const v = track.filter(s => s.p);
+  const p0 = ([...v].reverse().find(s => s.t <= call.t_sec) || v.find(s => s.t > call.t_sec))?.p;
+  const win = v.filter(s => s.t > call.t_sec && s.t <= tEnd);
+  // baseline = the spot at the beep, moved to any later spot that is closer to T (a player still coming back from the last call
+  // keeps arriving; that is not the start of a new move). start = first sample move_m away from the baseline.
+  let b = p0, bd = p0 ? dist(p0, t) : 0, i0 = -1;
+  if (p0) for (let i = 0; i < win.length; i++) {
+    const d = dist(win[i].p, t);
+    if (d < bd) { b = win[i].p; bd = d; } else if (dist(win[i].p, b) >= o.move_m) { i0 = i; break; }
+  }
+  if (i0 < 0) return { ...base, status: 'missed' };
+  const start = win[i0];
+  const trip = win.slice(i0), sm = smoothP(trip);
+  let m = -1, ri = -1;
+  for (let i = 0; i < trip.length; i++) {
+    const dd = sm[i] ? dist(sm[i], t) : -1;
+    if (dd > m) m = dd; else if (m > o.away_m && sm[i] && dd <= o.t_radius_m) { ri = i; break; }
+  }
+  const ret = ri >= 0 ? trip[ri] : null, k = touchOf(ret ? trip.slice(0, ri + 1) : trip, t);
+  const r = { ...base, reaction_sec: start.t - call.t_sec, start_sec: start.t };
+  if (!k || k.d <= o.away_m) return { ...r, status: 'short' };
+  const retT = ret ? ret.t : tEnd;
+  return { ...r, status: 'ok', touch_sec: k.t, return_sec: retT, out_sec: k.t - start.t, back_sec: retT - k.t, rep_sec: retT - call.t_sec,
+    returned: !!ret, touch_m: k.pt, touch_corner: cornerOf(k.pt), corner_ok: cornerOf(k.pt) === call.corner };
+}
+
+// Sets from segmentSets -> same sets with per-call results and per-set statistics:
+// {start_sec, end_sec, calls, n_calls, reps (status ok), reaction, out, back, rep (means; null if none), corner_pct (corner_ok share of reps)}.
+export function detectIntervals(track, sets, t, o) {
+  return sets.map(st => {
+    const calls = st.calls.map((c, i) => detectCall(track, c, st.calls[i + 1]?.t_sec ?? st.end_sec, t, o));
+    const ok = calls.filter(c => c.status === 'ok'), m = k => meanOf(ok.map(c => c[k]));
+    return { start_sec: st.start_sec, end_sec: st.end_sec, calls, n_calls: calls.length, reps: ok.length,
+      reaction: meanOf(calls.filter(c => c.reaction_sec != null).map(c => c.reaction_sec)), out: m('out_sec'), back: m('back_sec'), rep: m('rep_sec'),
+      corner_pct: ok.length ? ok.filter(c => c.corner_ok).length / ok.length * 100 : null };
+  });
+}
+
+// Slow-down over the sets in percent of the early time (positive = slower): (mean rep_sec late - early) / early x 100.
+// 4+ sets: first 2 vs last 2 sets; 2-3 sets: first vs last floor(n/2) sets (a middle set is left out); 1 set: its first vs second half of the calls.
+export function dropOff(sets) {
+  const reps = ss => ss.flatMap(s => s.calls).filter(c => c.status === 'ok').map(c => c.rep_sec);
+  const n = sets.length;
+  let a, b;
+  if (n >= 4) { a = reps(sets.slice(0, 2)); b = reps(sets.slice(-2)); }
+  else if (n >= 2) { const h = n >> 1; a = reps(sets.slice(0, h)); b = reps(sets.slice(n - h)); }
+  else if (n === 1) { const c = sets[0].calls, h = c.length >> 1; a = reps([{ calls: c.slice(0, h) }]); b = reps([{ calls: c.slice(c.length - h) }]); }
+  else return null;
+  const x = meanOf(a), y = meanOf(b);
+  return x && y != null ? (y - x) / x * 100 : null;
+}
+
+// Whole-session summary of detectIntervals output: {sets, calls, reps, missed, reaction, back, out, rep, corner_pct, drop_off_pct}.
+export function summarizeIntervals(sets) {
+  const calls = sets.flatMap(s => s.calls), ok = calls.filter(c => c.status === 'ok');
+  return { sets: sets.length, calls: calls.length, reps: ok.length, missed: calls.filter(c => c.status === 'missed').length,
+    reaction: meanOf(calls.filter(c => c.reaction_sec != null).map(c => c.reaction_sec)), out: meanOf(ok.map(c => c.out_sec)), back: meanOf(ok.map(c => c.back_sec)), rep: meanOf(ok.map(c => c.rep_sec)),
+    corner_pct: ok.length ? ok.filter(c => c.corner_ok).length / ok.length * 100 : null, drop_off_pct: dropOff(sets) };
+}
 
 // ---- drawing on the video overlay ----
 

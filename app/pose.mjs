@@ -7,16 +7,48 @@ export const COLORS = ['#00d8ff', '#ff9f1c'];
 export const MODE_LABEL = { '2d': '2D 화면', '3d': '3D 추정' };
 
 // runningMode: 'VIDEO' (detectForVideo, needs increasing timestamps) or 'IMAGE' (detect, stateless).
-export async function loadPose(runningMode) {
+export async function loadPose(runningMode, numPoses = 2) {
   const { FilesetResolver, PoseLandmarker } = await import(`${CDN}/vision_bundle.mjs`);
   const fileset = await FilesetResolver.forVisionTasks(`${CDN}/wasm`);
   const make = delegate => PoseLandmarker.createFromOptions(fileset, {
     baseOptions: { modelAssetPath: new URL('./models/pose_landmarker_full.task', import.meta.url).href, delegate },
-    runningMode, numPoses: 2,
+    runningMode, numPoses,
   });
   let landmarker;
-  try { landmarker = await make('GPU'); } catch { landmarker = await make('CPU'); }
-  return { landmarker, connections: PoseLandmarker.POSE_CONNECTIONS.filter(c => c.start >= 11 && c.end >= 11) };
+  let delegate = 'GPU';
+  try { landmarker = await make('GPU'); } catch { delegate = 'CPU'; landmarker = await make('CPU'); }
+  return { landmarker, delegate, connections: PoseLandmarker.POSE_CONNECTIONS.filter(c => c.start >= 11 && c.end >= 11) };
+}
+
+// Recovery landmarkers (IMAGE mode, same model), one per numPoses, created on first use. Never switch numPoses with setOptions:
+// MediaPipe rebuilds the graph on every setOptions (~250 ms per call measured on IMG_1232, 5 min -> 56 min analysis).
+const imgLm = {};
+export const getImageLandmarker = n => imgLm[n] ||= loadPose('IMAGE', n).then(r => r.landmarker);
+
+// ---- missed-person recovery (pure helpers; measured with the Python port: 2 people in 29.9% -> 75.1% of game frames) ----
+// Crop around a person's last landmarks: ~2.5x their bounding box (min 12% of the frame height), clamped. -> {x, y, w, h} px.
+export function cropRect(lm, W, H) {
+  const xs = lm.map(q => q.x * W), ys = lm.map(q => q.y * H), x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, s = Math.max(x1 - x0, y1 - y0, 0.12 * H) * 1.25;
+  const X0 = Math.round(Math.max(0, cx - s)), Y0 = Math.round(Math.max(0, cy - s)), X1 = Math.round(Math.min(W, cx + s)), Y1 = Math.round(Math.min(H, cy + s));
+  return { x: X0, y: Y0, w: Math.max(1, X1 - X0), h: Math.max(1, Y1 - Y0) };
+}
+// 3x2 overlapping tiles, each 50% wide x 60% high.
+export const gridRects = (W, H) => [0, 0.25, 0.5].flatMap(xa => [0, 0.4].map(ya => ({ x: Math.round(xa * W), y: Math.round(ya * H), w: Math.round(0.5 * W), h: Math.round(0.6 * H) })));
+// Upscale factor so the short side of a crop reaches minShort (never shrinks).
+export const cropScale = (r, minShort) => Math.max(1, minShort / Math.min(r.w, r.h));
+// Landmarks found in a crop (normalized to the crop) -> normalized to the full frame.
+export const mapBack = (lm, r, W, H) => lm.map(q => ({ ...q, x: (r.x + q.x * r.w) / W, y: (r.y + q.y * r.h) / H }));
+// Same person = hip centres closer than 5% of the frame width; of two copies the more visible one stays. Order: first seen first.
+export function mergePeople(list, W, H) {
+  const hip = p => [(p.lm[23].x + p.lm[24].x) / 2 * W, (p.lm[23].y + p.lm[24].y) / 2 * H];
+  const score = p => p.lm.reduce((a, q) => a + (q.visibility ?? 1), 0) / p.lm.length;
+  const out = [];
+  for (const p of list) {
+    const h = hip(p), j = out.findIndex(q => Math.hypot(h[0] - hip(q)[0], h[1] - hip(q)[1]) < 0.05 * W);
+    if (j < 0) out.push(p); else if (score(p) > score(out[j])) out[j] = p;
+  }
+  return out;
 }
 
 // MediaPipe result -> [{lm: normalized landmarks, wl: world landmarks|null}]

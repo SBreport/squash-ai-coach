@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>고스팅 신호음</title>
+<style>
+  :root { color-scheme: dark; --bg: #101418; --fg: #eef2f6; --mut: #8a96a3; --card: #1b222a; --acc: #ffd23c; --go: #2fb85f; --stop: #d4493c; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.4 -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; padding: 16px max(16px, env(safe-area-inset-right)) 32px max(16px, env(safe-area-inset-left)); max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  .card { background: var(--card); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  label { display: block; font-size: 13px; color: var(--mut); }
+  input[type=number] { width: 100%; font-size: 20px; padding: 10px; margin-top: 4px; border-radius: 10px; border: 1px solid #34404c; background: #0d1116; color: var(--fg); min-height: 48px; }
+  .chk { display: flex; align-items: center; gap: 10px; font-size: 16px; color: var(--fg); min-height: 48px; }
+  .chk input { width: 24px; height: 24px; }
+  button { font: inherit; font-size: 20px; font-weight: 700; border: 0; border-radius: 14px; min-height: 64px; width: 100%; color: #fff; background: var(--go); }
+  button.stop { background: var(--stop); }
+  button.small { font-size: 15px; font-weight: 600; min-height: 48px; background: #34404c; }
+  .row { display: flex; gap: 10px; }
+  #run { text-align: center; }
+  #big { font-size: 56px; font-weight: 800; line-height: 1.1; margin: 6px 0; min-height: 62px; color: var(--acc); }
+  #sub { color: var(--mut); min-height: 22px; }
+  #map { width: 150px; height: auto; margin: 8px auto 0; display: block; }
+  textarea { width: 100%; height: 120px; font: 12px/1.3 ui-monospace, Menlo, monospace; background: #0d1116; color: var(--fg); border: 1px solid #34404c; border-radius: 10px; padding: 8px; }
+  .hide { display: none; }
+  .note { font-size: 13px; color: var(--mut); }
+</style>
+</head>
+<body>
+<h1>고스팅 신호음</h1>
+
+<div id="cfg" class="card">
+  <div class="grid">
+    <label>운동 (초)<input id="work" type="number" inputmode="numeric" min="5" step="1"></label>
+    <label>휴식 (초)<input id="rest" type="number" inputmode="numeric" min="0" step="1"></label>
+    <label>세트<input id="sets" type="number" inputmode="numeric" min="1" step="1"></label>
+    <span></span>
+    <label>호출 간격 최소 (초)<input id="imin" type="number" inputmode="decimal" min="0.5" step="0.1"></label>
+    <label>호출 간격 최대 (초)<input id="imax" type="number" inputmode="decimal" min="0.5" step="0.1"></label>
+  </div>
+  <label class="chk"><input id="voice" type="checkbox"> 음성으로 코너 이름 말하기</label>
+  <button id="start">시작</button>
+  <p class="note">휴대폰 소리를 키우고 뒷벽 쪽 바닥에 두세요. 시작을 누르면 5초 뒤 첫 세트가 시작되고, 이 화면은 꺼지지 않게 유지됩니다.</p>
+</div>
+
+<div id="run" class="card hide">
+  <div id="sub"></div>
+  <div id="big"></div>
+  <svg id="map" viewBox="-4 -4 72 105" aria-hidden="true"></svg>
+  <div style="height:12px"></div>
+  <button id="stop" class="stop">중지</button>
+</div>
+
+<div id="logbox" class="card hide">
+  <div id="summary"></div>
+  <p class="note">기록 (분석용, 필수 아님)</p>
+  <textarea id="log" readonly></textarea>
+  <div class="row" style="margin-top:8px">
+    <button class="small" id="copy">복사</button>
+    <button class="small" id="dl">파일로 저장</button>
+  </div>
+</div>
+
+<script>
+// Tone plan: duplicated from app/audio.mjs (CUE_TONES) — that file is the source of truth; keep both in sync.
+const PLAN = {
+  calls: { front_left: 1000, front_right: 1440, side_left: 1880, side_right: 2320, back_left: 2760, back_right: 3200 },
+  call_ms: 250,
+  set_start: { hz: 3700, ms: 150, gap_ms: 100, n: 2 },
+  set_end: { hz: 700, ms: 700 },
+  fade_ms: 10,
+};
+const NAME = { front_left: '앞 왼쪽', front_right: '앞 오른쪽', side_left: '옆 왼쪽', side_right: '옆 오른쪽', back_left: '뒤 왼쪽', back_right: '뒤 오른쪽' };
+const CORNERS = Object.keys(PLAN.calls);
+const POS = { front_left: [8, 10], front_right: [56, 10], side_left: [8, 54.4], side_right: [56, 54.4], back_left: [8, 88], back_right: [56, 88] }; // minimap, court 64 x 97.5
+const AMP = 0.8;
+const $ = id => document.getElementById(id);
+const DEF = { work: 30, rest: 30, sets: 6, imin: 2.5, imax: 3.5, voice: true };
+
+// ---- settings (localStorage, may be blocked) ----
+function loadCfg() {
+  let s = {}; try { s = JSON.parse(localStorage.getItem('sqc_cue') || '{}'); } catch (e) {}
+  for (const k in DEF) { const v = k in s ? s[k] : DEF[k]; if (k === 'voice') $(k).checked = !!v; else $(k).value = v; }
+}
+function readCfg() {
+  const n = (id, lo) => { const v = parseFloat($(id).value); return isFinite(v) ? Math.max(lo, v) : DEF[id]; };
+  const c = { work: n('work', 5), rest: n('rest', 0), sets: Math.round(n('sets', 1)), imin: n('imin', 0.5), imax: n('imax', 0.5), voice: $('voice').checked };
+  if (c.imax < c.imin) c.imax = c.imin;
+  try { localStorage.setItem('sqc_cue', JSON.stringify(c)); } catch (e) {}
+  return c;
+}
+
+// ---- audio ----
+let ctx = null, zero = 0; // zero = ctx time of "start"
+function tone(hz, ms, at) {
+  const o = ctx.createOscillator(), g = ctx.createGain(), f = PLAN.fade_ms / 1000, d = ms / 1000;
+  o.type = 'sine'; o.frequency.value = hz; o.connect(g); g.connect(ctx.destination);
+  g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(AMP, at + f);
+  g.gain.setValueAtTime(AMP, at + d - f); g.gain.linearRampToValueAtTime(0, at + d);
+  o.start(at); o.stop(at + d + 0.02);
+}
+function speak(text) {
+  try {
+    if (!('speechSynthesis' in window)) return;
+    const u = new SpeechSynthesisUtterance(text); u.lang = 'ko-KR'; u.rate = 1.1;
+    speechSynthesis.speak(u);
+  } catch (e) {}
+}
+
+// ---- screen ----
+function drawMap(active) {
+  const dot = c => `<circle cx="${POS[c][0]}" cy="${POS[c][1]}" r="${c === active ? 7 : 3}" fill="${c === active ? '#ffd23c' : '#4a5663'}"/>`;
+  $('map').innerHTML = `<rect x="0" y="0" width="64" height="97.5" fill="none" stroke="#8a96a3" stroke-width="1"/>
+    <line x1="0" y1="54.4" x2="64" y2="54.4" stroke="#8a96a3" stroke-width=".8"/><line x1="32" y1="54.4" x2="32" y2="97.5" stroke="#8a96a3" stroke-width=".8"/>
+    <rect x="0" y="54.4" width="16" height="16" fill="none" stroke="#8a96a3" stroke-width=".8"/><rect x="48" y="54.4" width="16" height="16" fill="none" stroke="#8a96a3" stroke-width=".8"/>
+    <circle cx="32" cy="54.4" r="2" fill="#fff"/>${CORNERS.map(dot).join('')}`;
+}
+const show = (big, sub) => { $('big').textContent = big; $('sub').textContent = sub || ''; };
+
+// ---- session ----
+let abort = false, wake = null;
+const wait = ms => new Promise(r => setTimeout(r, ms));
+async function keepAwake() { try { wake = await navigator.wakeLock?.request('screen'); } catch (e) {} }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && !$('run').classList.contains('hide')) keepAwake(); });
+
+async function countdown(sec, label, sub) { // returns false when aborted
+  for (let i = Math.ceil(sec); i > 0 && !abort; i--) { show(String(i), `${label}${sub ? ' · ' + sub : ''}`); drawMap(null); await wait(1000); }
+  return !abort;
+}
+
+async function session() {
+  const cfg = readCfg(), log = { app: 'squash-ai-coach cue', started_at: new Date().toISOString(), settings: cfg, events: [] };
+  abort = false;
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  await ctx.resume(); // unlock on the tap (iOS)
+  $('cfg').classList.add('hide'); $('logbox').classList.add('hide'); $('run').classList.remove('hide');
+  keepAwake();
+  let last = null, calls = [];
+  if (await countdown(5, '준비')) {
+    zero = ctx.currentTime;
+    log.started_at = new Date().toISOString();
+    for (let s = 1; s <= cfg.sets && !abort; s++) {
+      calls[s - 1] = 0;
+      const at = ctx.currentTime + 0.05, ss = PLAN.set_start;
+      for (let k = 0; k < ss.n; k++) tone(ss.hz, ss.ms, at + k * (ss.ms + ss.gap_ms) / 1000);
+      log.events.push({ t_sec: +(at - zero).toFixed(3), kind: 'set_start', corner: null, set: s }); // first beep's start
+      const end = performance.now() + cfg.work * 1000;
+      show('세트 ' + s, `${s} / ${cfg.sets}`); drawMap(null);
+      await wait(1500);
+      while (!abort && end - performance.now() > 1200) {
+        let c; do { c = CORNERS[Math.floor(Math.random() * 6)]; } while (c === last);
+        last = c;
+        const t = ctx.currentTime + 0.05;
+        tone(PLAN.calls[c], PLAN.call_ms, t);
+        log.events.push({ t_sec: +(t - zero).toFixed(3), kind: 'call', corner: c, set: s }); calls[s - 1]++;
+        show(NAME[c], `세트 ${s} / ${cfg.sets}`); drawMap(c);
+        if (cfg.voice) setTimeout(() => speak(NAME[c]), 330);
+        const gap = (cfg.imin + Math.random() * (cfg.imax - cfg.imin)) * 1000;
+        await wait(Math.min(gap, Math.max(0, end - performance.now() - 700)));
+      }
+      if (abort) break;
+      await wait(Math.max(0, end - performance.now()));
+      const t = ctx.currentTime + 0.05;
+      tone(PLAN.set_end.hz, PLAN.set_end.ms, t);
+      log.events.push({ t_sec: +(t - zero).toFixed(3), kind: 'set_end', corner: null, set: s });
+      if (s < cfg.sets) { if (!await countdown(cfg.rest, '휴식', `다음 세트 ${s + 1} / ${cfg.sets}`)) break; }
+    }
+  }
+  speechSynthesis?.cancel?.();
+  try { wake?.release(); } catch (e) {}
+  setTimeout(() => ctx.close?.(), 1000);
+  $('run').classList.add('hide'); $('cfg').classList.remove('hide'); $('logbox').classList.remove('hide');
+  $('summary').innerHTML = `<b>${abort ? '중지됨' : '끝!'}</b> · 세트 ${calls.length}${calls.length ? ' · 호출 ' + calls.join(' / ') : ''}`;
+  $('log').value = JSON.stringify(log, null, 1);
+}
+
+$('start').onclick = () => { if (!$('run').classList.contains('hide')) return; session(); };
+$('stop').onclick = () => { abort = true; };
+$('copy').onclick = async () => { try { await navigator.clipboard.writeText($('log').value); } catch (e) { $('log').select(); document.execCommand('copy'); } };
+$('dl').onclick = () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([$('log').value], { type: 'application/json' }));
+  a.download = 'cue-log.json'; a.click();
+};
+loadCfg(); drawMap(null);
+</script>
+</body>
+</html>

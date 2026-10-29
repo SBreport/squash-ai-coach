@@ -9,6 +9,10 @@ export const METRICS = [
   { key: 't_occ', label: 'T 점유율', unit: '%', dec: 1, better: 'higher' },
   { key: 'ghost_total', label: '고스팅 총시간', unit: '초', dec: 1, better: 'lower' },
   { key: 'slow_corner', label: '가장 느린 코너', unit: '초', dec: 2, better: 'lower' },
+  { key: 'interval_reps', label: '인터벌 총 횟수', unit: '회', dec: 0, better: 'higher' },
+  { key: 'interval_reaction', label: '인터벌 반응 시간', unit: '초', dec: 2, better: 'lower' },
+  { key: 'interval_back', label: '인터벌 복귀 시간', unit: '초', dec: 2, better: 'lower' },
+  { key: 'interval_dropoff', label: '인터벌 속도 저하', unit: '%', dec: 1, better: 'lower' },
   { key: 'hr_recovery', label: '회복 심박', unit: ' bpm', dec: 0, better: 'higher' },
 ];
 
@@ -51,14 +55,15 @@ export function summarizeSession(raw, opts = {}) {
   const ks = (events || []).map(e => signalValue('knee_min', e.angles)).filter(x => x != null);
   const ss = (events || []).map(e => num(e.angles?.stance_ratio)).filter(x => x != null);
   const hr = court?.hr || meta?.hr || null;
-  const avg = court?.corner_avg, slow = court?.slowest_corner;
+  const avg = court?.corner_avg, slow = court?.slowest_corner, iv = court?.intervals?.summary, isets = !!court?.intervals?.sets?.length;
   const date = /^(\d{4}-\d{2}-\d{2})/.exec(name)?.[1] || meta?.created_at?.slice(0, 10) || null;
   return {
     name, date, label: meta?.label || name, n_events: events ? events.length : null,
     knee_min_avg: mean(ks), stance_avg: mean(ss),
     t_occ: num(court?.t_occupancy_pct),
-    ghost_total: court?.excursions?.length ? num(court.total_sec) : null, ghost_visits: court?.excursions?.length ?? null,
-    slow_corner: slow && avg?.[slow] ? num(avg[slow].avg_sec) : null, slow_corner_name: slow || null,
+    ghost_total: !isets && court?.excursions?.length ? num(court.total_sec) : null, ghost_visits: !isets ? court?.excursions?.length ?? null : null,
+    slow_corner: !isets && slow && avg?.[slow] ? num(avg[slow].avg_sec) : null, slow_corner_name: !isets ? slow || null : null,
+    interval_reps: isets ? num(iv?.reps) : null, interval_reaction: isets ? num(iv?.reaction) : null, interval_back: isets ? num(iv?.back) : null, interval_dropoff: isets ? num(iv?.drop_off_pct) : null,
     hr_recovery: hr ? (num(hr.recovery) ?? recoveryHr(hr.a, hr.b)) : null,
   };
 }

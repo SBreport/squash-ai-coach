@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { KEYS, angle, trunkLean, poseAngles, angle3, trunkLean3, poseAngles3, stanceRatio, frontSide, resolveMetric, checkpointValue, judge,
   detectEvents, medianSmooth, signalValue, fpsFromDeltas, strideFor } from '../app/angles.mjs';
-import { layoutLabels, createTracker } from '../app/pose.mjs';
+import { layoutLabels, createTracker, cropRect, gridRects, cropScale, mapBack, mergePeople } from '../app/pose.mjs';
 import { colorHist, histSim, personHist, assignTracks, findOverlaps, applySwaps, IDENTITY_DEFAULTS, HIST_LEN } from '../app/identity.mjs';
+import { CUE_TONES, findTones, segmentSets } from '../app/audio.mjs';
+import { render as renderTones } from './audio.mjs';
 import { METRICS, summarizeSession, diffSessions, withDiffs, recoveryHr } from '../app/history.mjs';
-import { COURT, T, COURT_POINTS, CAL_ORDER, CAL_REQUIRED, calGuideSvg, ghostGuideSvg, courtSvg, CORNERS, homography, applyH, invertH, calibrate, footPoint, courtPos, tOccupancy,
-  cornerOf, detectExcursions, cornerAvg, slowestCorner, totalSec, handsUp, detectHandsUp } from '../app/court.mjs';
+import { COURT, T, COURT_POINTS, CAL_ORDER, CAL_REQUIRED, calGuideSvg, ghostGuideSvg, courtSvg, CORNERS, homography, applyH, invertH, calibrate, footPoint, footPoints, courtPos, tOccupancy,
+  fillGaps, despike, outBackAvg, detectCall, detectIntervals, dropOff, summarizeIntervals, cornerOf, detectExcursions, cornerAvg, slowestCorner, totalSec, handsUp, detectHandsUp } from '../app/court.mjs';
 
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
 
@@ -383,7 +385,7 @@ assert.equal(recoveryHr(150, null), null); assert.equal(recoveryHr('', 120), nul
   assert.equal(g(list[2], 't_occ').text, '+5.0%');          // skips the middle session that has no value
   assert.equal(g(list[2], 'ghost_total').text, '-2.0초');   // compared with 41, not with the null first session
   assert.equal(g(list[1], 'ghost_total').text, '첫 기록');
-  assert.deepEqual(METRICS.map(m => m.key), ['knee_min_avg', 'stance_avg', 't_occ', 'ghost_total', 'slow_corner', 'hr_recovery']);
+  assert.deepEqual(METRICS.map(m => m.key), ['knee_min_avg', 'stance_avg', 't_occ', 'ghost_total', 'slow_corner', 'interval_reps', 'interval_reaction', 'interval_back', 'interval_dropoff', 'hr_recovery']);
 }
 
 const dir = new URL('../docs/data/', import.meta.url);
@@ -521,4 +523,126 @@ assert.ok(/AI/.test(ID.note), 'identity.note must say these are AI-set values');
   assert.equal(IDENTITY_DEFAULTS.overlap_dist, 0.08);
 }
 
-console.log(`check.mjs: ok (angles 2D/3D, checkpoints, auto detect, fps, overlay labels, court homography/wizard order/T/excursions, history/diff/recovery HR, identity colour/assign/overlaps/swaps, ${files.length} data files)`);
+// ghosting v1.9: lead-foot far point, gap filling, out/back split
+{
+  const [tx, ty] = T, OP = { t_radius_m: 1.0, away_m: 1.5, min_away_sec: 0.3 };
+  // lead foot: the average of both feet is 0.4 m short of the front-left corner zone, the lead foot is in it
+  const lm = Array.from({ length: 33 }, () => ({ x: 0, y: 0, visibility: 1 }));
+  lm[29] = { x: 0.2, y: 0.5, visibility: 1 }; lm[30] = { x: 0.6, y: 0.5, visibility: 0.1 }; lm[28] = { x: 0.4, y: 0.6, visibility: 0.9 };
+  assert.deepEqual(footPoints(lm, 100, 100), [[20, 50], [40, 60]]);
+  lm[30].visibility = 0; lm[28].visibility = 0;
+  assert.deepEqual(footPoints(lm, 100, 100), [[20, 50], null]); near(footPoint(lm, 100, 100)[0], 20);
+  const mk = (t, p, f) => ({ t, p, f });
+  // a lunge, 0.1 s samples: the touch time is the farthest MEAN position, the touch point the median lead-foot position around it
+  const lunge = [mk(0, [tx, ty]), mk(0.5, [tx, ty]), mk(0.6, [2.2, 4.4], [[2.0, 4.0], [2.4, 4.8]]), mk(0.7, [1.6, 3.4], [[1.2, 3.0], [2.0, 3.8]]), mk(0.8, [1.0, 2.6], [[0.8, 2.2], [1.6, 3.8]]),
+    mk(0.9, [1.0, 2.6], [[0.8, 2.2], [1.6, 4.0]]), mk(1.0, [1.0, 2.6], [[0.9, 2.4], [1.7, 4.2]]), mk(1.1, [1.8, 3.8]), mk(1.2, [2.4, 4.3]), mk(1.6, [tx, ty])];
+  const e = detectExcursions(lunge, T, OP)[0];
+  assert.equal(e.corner, 'front_left'); assert.equal(e.far_sec, 0.8); assert.deepEqual(e.far_m.map(x => Math.round(x * 10) / 10), [0.9, 2.4]);
+  near(e.out_sec, 0.8 - 0.6); near(e.back_sec, 1.6 - 0.8); near(e.out_sec + e.back_sec, e.duration_sec);
+  // one sample with a lifted foot projected 3 m too far: touch time stays at the mean-position maximum, the point ignores the spike
+  const spike = lunge.map(q => q.t === 0.9 ? { ...q, f: [[3.0, 0.4], q.f[1]] } : q);
+  const e2 = detectExcursions(spike, T, OP)[0];
+  assert.equal(e2.far_sec, 0.8); assert.ok(e2.far_m[1] > 2 && e2.far_m[1] < 3, `touch point ${e2.far_m}`); assert.equal(e2.corner, 'front_left');
+  // the spike alone (no smoothing of the point needed for the time): even a spike AT the best-mean sample cannot move the time
+  const spike2 = lunge.map(q => q.t === 0.6 ? { ...q, f: [[3.2, 0.1], [3.2, 0.1]] } : q);
+  assert.equal(detectExcursions(spike2, T, OP)[0].far_sec, 0.8);
+  near(outBackAvg([e, { out_sec: 0.4, back_sec: 0.2 }]).out, 0.3); assert.equal(outBackAvg([]).out, null);
+  // gaps: <= 0.5 s filled (and flagged), longer left empty, feet filled only where both ends have the foot
+  const g = fillGaps([mk(0, [0, 0], [[0, 0], null]), mk(0.1, null), mk(0.2, null), mk(0.3, [3, 3], [[3, 3], [1, 1]]), mk(0.4, null), mk(1.0, [4, 4]), mk(1.1, null), mk(1.2, [5, 5])]);
+  near(g[1].p[0], 1); near(g[2].p[1], 2); assert.ok(g[1].interp && g[2].interp);
+  assert.deepEqual(g[1].f, [[1, 1], null]);
+  assert.equal(g[4].p, null, '0.7 s hole stays empty'); assert.ok(!g[4].interp);
+  near(g[6].p[0], 4.5);                                            // 0.2 s hole
+  assert.equal(fillGaps([mk(0, [0, 0]), mk(0.25, null), mk(0.5, [1, 1])])[1].p[0], 0.5); // exactly 0.5 s: filled
+  assert.equal(fillGaps([mk(0, [0, 0]), mk(0.3, null), mk(0.6, [1, 1])])[1].p, null);  // 0.6 s: not
+  assert.equal(fillGaps([mk(0, null), mk(0.1, [1, 1])])[0].p, null, 'no fill before the first known sample');
+  // despike: a one-sample jump is removed, a steady run (and a lone first/last sample) is not
+  const sp = despike([mk(0, [1, 1]), mk(0.1, [1, 1.1], [[1, 1.1], [1, 1.1]]), mk(0.2, [1, 9], [[1, 9], [1, 1.2]]), mk(0.3, [1, 1.2], [[1, 1.2], [1, 1.2]]), mk(0.4, [1, 1.3], [[1, 1.3], null])]);
+  near(sp[2].p[1], 1.2); near(sp[2].f[0][1], 1.2); near(sp[4].p[1], 1.3);
+  const run = [0, 1, 2, 3, 4].map(i => mk(i / 10, [i, 0]));
+  assert.deepEqual(despike(run).map(q => q.p[0]), [0, 1, 2, 3, 4]);
+  // a 0.4 s hole in the middle of a visit no longer splits it into "no visit"
+  const hole = [mk(0, [tx, ty]), mk(0.5, [tx, ty]), mk(0.6, [2.4, 4.4]), mk(0.7, null), mk(0.8, null), mk(0.9, null), mk(1.0, [0.8, 2.0]), mk(1.3, [2.4, 4.4]), mk(1.6, [tx, ty])];
+  assert.equal(detectExcursions(hole, T, OP).length, 1);
+}
+
+// interval sets: tones (synthetic sound) + track (synthetic positions) -> per-call results
+{
+  const [tx, ty] = T, OPI = { t_radius_m: 1.0, away_m: 1.5, move_m: 0.3 };
+  const path = wps => { const out = []; for (let t = 0; t <= wps[wps.length - 1][0] + 1e-9; t += 0.05) {
+    let i = 0; while (i < wps.length - 2 && wps[i + 1][0] < t) i++;
+    const [t0, x0, y0] = wps[i], [t1, x1, y1] = wps[i + 1], k = Math.max(0, Math.min(1, (t - t0) / (t1 - t0)));
+    out.push({ t: Math.round(t * 100) / 100, p: [x0 + (x1 - x0) * k, y0 + (y1 - y0) * k] }); } return out; };
+  const events = [{ t: 8, kind: 'set_start' }, { t: 10, kind: 'call', corner: 'front_left' }, { t: 13.5, kind: 'call', corner: 'back_right' }, { t: 17.5, kind: 'call', corner: 'side_left' },
+    { t: 20.5, kind: 'call', corner: 'front_right' }, { t: 22.9, kind: 'call', corner: 'back_left' }, { t: 40, kind: 'set_end' },
+    { t: 50, kind: 'set_start' }, { t: 52, kind: 'call', corner: 'side_left' }, { t: 60, kind: 'set_end' }];
+  const sr = 44100, x = renderTones({ events, dur: 62 }, sr, { clean: true });
+  const tones = findTones(x, sr), sets = segmentSets(tones);
+  assert.equal(tones.length, events.length); assert.equal(sets.length, 2); assert.deepEqual(sets.map(s => s.calls.length), [5, 1]);
+  const track = path([[0, tx, ty], [10.35, tx, ty], [11.5, 0.8, 1.0], [11.8, 0.8, 1.0], [13.0, tx, ty],        // call 1: reaction .35, touch 11.5-11.8, home 13.0
+    [13.9, tx, ty], [15.2, 5.6, 9.0], [15.4, 5.6, 9.0], [17.0, tx, ty],                                         // call 2: reaction .4
+    [20.9, tx, ty], [22.0, 5.9, 5.44], [22.3, 5.9, 5.44], [23.5, tx, ty],                                       // call 3 (17.5): no move = missed; call 4 front_right: goes to the side-right wall, still on the way back at call 5
+    [24.0, tx, ty], [25.5, 0.8, 8.75], [25.8, 0.8, 8.75], [27.5, tx, ty], [51.7, tx, ty],                      // call 5: baseline = home at 23.5, reaction from the beep 22.9 to 24.0
+    [52.4, tx, ty], [53.2, 0.4, 5.44], [53.4, 0.4, 5.44], [55, tx, ty], [62, tx, ty]]);
+  const iv = detectIntervals(track, sets, T, OPI), c = iv[0].calls, w = (a, b, tol = 0.07) => assert.ok(Math.abs(a - b) <= tol, `${a} vs ${b}`);
+  assert.equal(iv.length, 2); assert.deepEqual(c.map(q => q.status), ['ok', 'ok', 'missed', 'ok', 'ok']);
+  w(c[0].reaction_sec, 0.35 + 0.3 / 5.3 * 1.15); // detected when the player has moved 0.3 m
+  assert.ok(c[0].reaction_sec > 0.35 && c[0].reaction_sec < 0.6, `reaction ${c[0].reaction_sec}`);
+  assert.equal(c[0].touch_corner, 'front_left'); assert.ok(c[0].corner_ok); w(c[0].touch_sec, 11.5, 0.3);
+  w(c[0].out_sec + c[0].back_sec + c[0].reaction_sec, c[0].rep_sec, 1e-6);
+  assert.ok(c[0].returned); w(c[0].return_sec, 13.0 - 0.15, 0.3);                         // back inside the 1 m circle slightly before 13.0
+  assert.ok(c[0].back_sec > c[0].out_sec - 0.2 && c[0].back_sec < 2.2);
+  assert.ok(c[1].corner_ok && c[1].touch_corner === 'back_right');
+  assert.equal(c[2].reaction_sec, undefined);                                              // missed: nothing else filled
+  assert.equal(c[3].touch_corner, 'side_right'); assert.equal(c[3].corner_ok, false);      // wrong corner
+  assert.equal(c[3].returned, false); assert.equal(c[3].return_sec, sets[0].calls[4].t_sec); w(c[3].rep_sec, 22.9 - 20.5, 0.03); // cut by the next call
+  assert.ok(c[4].corner_ok && c[4].reaction_sec > 1.0, `still returning at the beep: reaction counted from the beep ${c[4].reaction_sec}`);
+  assert.equal(iv[0].reps, 4); w(iv[0].corner_pct, 75, 1e-9); assert.equal(iv[0].n_calls, 5);
+  assert.equal(iv[1].calls[0].touch_corner, 'side_left'); assert.ok(iv[1].calls[0].corner_ok);
+  const sm = summarizeIntervals(iv);
+  assert.deepEqual([sm.sets, sm.calls, sm.reps, sm.missed], [2, 6, 5, 1]);
+  assert.ok(sm.reaction > 0 && sm.back > 0 && sm.drop_off_pct != null);
+  // short: moved 0.5 m but never beyond away_m; no tones -> no sets
+  const sh = detectCall(path([[0, tx, ty], [1, tx + 0.8, ty], [3, tx, ty]]), { t_sec: 0.2, corner: 'side_right' }, 3, T, OPI);
+  assert.equal(sh.status, 'short'); assert.ok(sh.reaction_sec > 0);
+  assert.deepEqual(segmentSets(findTones(renderTones({ events: [], dur: 5 }, sr, { clean: true }), sr)), []);
+}
+
+// drop-off: positive = slower later
+{
+  const set = reps => ({ calls: reps.map(r => ({ status: 'ok', rep_sec: r })) });
+  near(dropOff([set([2, 2]), set([2, 2]), set([3, 3]), set([3, 3])]), 50);               // 4 sets: first 2 vs last 2
+  near(dropOff([set([2]), set([4]), set([2]), set([3]), set([3])]), (3 - 3) / 3 * 100);   // sets 1-2 mean 3, sets 4-5 mean 3
+  near(dropOff([set([2, 2]), set([1, 1])]), -50);                                         // 2 sets: first vs second (faster = negative)
+  near(dropOff([set([2]), set([9]), set([3])]), 50);                                       // 3 sets: first vs last, middle left out
+  near(dropOff([set([2, 2, 4, 4])]), 100);                                                 // 1 set: first half vs second half of the calls
+  assert.equal(dropOff([]), null); assert.equal(dropOff([{ calls: [{ status: 'missed' }] }, { calls: [] }]), null);
+  // missed calls do not count
+  near(dropOff([{ calls: [{ status: 'ok', rep_sec: 2 }, { status: 'missed' }] }, { calls: [{ status: 'ok', rep_sec: 3 }] }]), 50);
+  // history: interval sessions record interval metrics and no 18-visit ghosting numbers
+  const s = summarizeSession({ name: '2026-10-30-iv', court: { excursions: [{}], total_sec: 99, slowest_corner: 'back_left', corner_avg: { back_left: { avg_sec: 2 } },
+    intervals: { sets: [{}], summary: { reps: 24, reaction: 0.42, back: 1.1, drop_off_pct: 6.5 } } } });
+  assert.deepEqual([s.interval_reps, s.interval_reaction, s.interval_back, s.interval_dropoff, s.ghost_total, s.slow_corner], [24, 0.42, 1.1, 6.5, null, null]);
+  const d = diffSessions({ interval_reaction: 0.5, interval_dropoff: 5, interval_reps: 20 }, { interval_reaction: 0.4, interval_dropoff: 8, interval_reps: 24 });
+  const tone = k => d.find(q => q.key === k).tone;
+  assert.deepEqual([tone('interval_reaction'), tone('interval_dropoff'), tone('interval_reps')], ['good', 'bad', 'good']);
+}
+
+// recovery helpers: crop clamping, mapping back, merge dedup
+{
+  const mk = (x, y, v = 1) => Array.from({ length: 33 }, () => ({ x, y, visibility: v }));
+  const edge = mk(0.02, 0.5); edge[0] = { x: 0.0, y: 0.4, visibility: 1 }; edge[1] = { x: 0.05, y: 0.6, visibility: 1 };
+  const r = cropRect(edge, 1000, 500);
+  assert.ok(r.x === 0 && r.x + r.w <= 1000 && r.y >= 0 && r.y + r.h <= 500 && r.w > 0 && r.h > 0, 'crop clamped to frame');
+  assert.equal(cropRect(mk(0.5, 0.5), 1000, 500).w, Math.round(2 * 0.12 * 500 * 1.25), 'min size 12% of H');
+  const back = mapBack([{ x: 0.5, y: 0.25, visibility: 0.9 }], { x: 200, y: 100, w: 400, h: 200 }, 1000, 500);
+  near(back[0].x, 0.4); near(back[0].y, 0.30); assert.equal(back[0].visibility, 0.9);
+  assert.equal(cropScale({ w: 300, h: 200 }, 512), 2.56); assert.equal(cropScale({ w: 900, h: 700 }, 512), 1);
+  assert.equal(gridRects(1000, 500).length, 6);
+  const a = { lm: mk(0.5, 0.5, 0.6) }, b = { lm: mk(0.52, 0.5, 0.9), rec: 1 }, c = { lm: mk(0.8, 0.5) };
+  const m = mergePeople([a, b, c], 1000, 500);
+  assert.deepEqual(m, [b, c], 'near copies merge keeping the more visible one');
+  assert.equal(mergePeople([a, { lm: mk(0.57, 0.5) }], 1000, 500).length, 2, '7% apart = two people');
+}
+
+console.log(`check.mjs: ok (lead-foot/gap fill/out-back, interval calls + drop-off, recovery helpers, angles 2D/3D, checkpoints, auto detect, fps, overlay labels, court homography/wizard order/T/excursions, history/diff/recovery HR, identity colour/assign/overlaps/swaps, ${files.length} data files)`);
